@@ -248,10 +248,29 @@ def V_READFIRSTLANE_B32 : VOP1_Pseudo <"v_readfirstlane_b32", VOP_READFIRSTLANE,
   let isConvergent = 1;
 }
 
+// V_READANYLANE_B32_PSEUDO is useful for an uniform input only. Unlike
+// V_READFIRSTLANE_B32 it is not marked as convergent and can be hoisted and
+// sinked in the control flow, which is only correct for uniform operand.
+def V_READANYLANE_B32_PSEUDO : VOP1_Pseudo <"v_readfirstlane_b32", VOP_READFIRSTLANE,
+                                            [], 1>;
+
 foreach vt = Reg32Types.types in {
   def : GCNPat<(vt (int_amdgcn_readfirstlane (vt VRegOrLdsSrc_32:$src0))),
         (V_READFIRSTLANE_B32 (vt VRegOrLdsSrc_32:$src0))
   >;
+}
+
+class UniformUnaryIntrArgFrag<SDPatternOperator Op> : PatFrag<
+  (ops node:$src0),
+  (Op $src0),
+  [{ return !N->getOperand(1)->isDivergent(); }]> {
+}
+
+foreach vt = Reg32Types.types in {
+  def : GCNPat<(vt (UniformUnaryIntrArgFrag<int_amdgcn_readfirstlane> (vt VRegOrLdsSrc_32:$src0))),
+        (V_READANYLANE_B32_PSEUDO (vt VRegOrLdsSrc_32:$src0))> {
+    let AddedComplexity = 1;
+  }
 }
 
 let HasOMod = 0, HasClamp = 0 in {
