@@ -253,9 +253,9 @@ pla           ; deallocate 4 bytes
 
 ## Test Cases That Fail
 
-### Loops with Conditional Branches (i1 type legalization)
+### Loops with Conditional Branches ✅ FIXED
 ```llvm
-; Fails: i1 type from icmp not properly legalized
+; Now works! Loops with icmp and br i1 compile correctly
 define i16 @count_down(i16 %n) {
 entry:
   br label %loop
@@ -263,31 +263,22 @@ loop:
   %val = phi i16 [ %n, %entry ], [ %dec, %loop ]
   %dec = add i16 %val, -1
   %done = icmp eq i16 %dec, 0
-  br i1 %done, label %exit, label %loop  ; <-- crashes here
+  br i1 %done, label %exit, label %loop
 exit:
   ret i16 %val
 }
 ```
 
-The issue is that `icmp` produces an i1 (boolean) result, and `br i1` tries to branch
-on this i1 value. The backend doesn't properly legalize i1 types. The crash occurs
-during DAG legalization with "Unexpected illegal type!".
+**Fix:** The issue was that condition codes were being created as MVT::i8 constants,
+but i8 is not a legal type in the backend (only i16 is registered). Changed all
+condition code constants to use MVT::i16.
 
-**Workaround:** Currently, only comparisons used directly in `br_cc` (combined
-comparison+branch) patterns work. Loops with explicit `icmp` followed by `br i1`
-will crash. This affects:
-- Simple loops with conditions
-- Select statements (`select i1 %cmp, ...`)
-- Any pattern where i1 is stored or manipulated
-
-**Partial fix implemented:**
+**Implementation:**
 - LowerSETCC: Returns 0 or 1 in i16 via SELECT_CC
 - LowerBRCOND: Compares condition with zero and branches if non-zero
+- LowerBR_CC: Custom lowering for combined comparison+branch
 - setBooleanContents(ZeroOrOneBooleanContent) configured
-
-The remaining issue is somewhere in the DAG legalization pipeline where an i1
-type is still being produced. Full fix requires deeper investigation into how
-LLVM handles the icmp → br i1 pattern vs BR_CC optimization.
+- All condition code constants use MVT::i16
 
 ## Completed Phases
 

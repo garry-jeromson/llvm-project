@@ -299,7 +299,7 @@ SDValue W65816TargetLowering::LowerSELECT_CC(SDValue Op,
 
   // Create the SELECT_CC node with the condition code
   SDVTList VTs = DAG.getVTList(Op.getValueType(), MVT::Glue);
-  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i8), Cmp};
+  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16), Cmp};
 
   return DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
 }
@@ -322,7 +322,7 @@ SDValue W65816TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   SDValue FalseVal = DAG.getConstant(0, DL, MVT::i16);
 
   SDVTList VTs = DAG.getVTList(MVT::i16, MVT::Glue);
-  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i8), Cmp};
+  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16), Cmp};
 
   return DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
 }
@@ -343,7 +343,7 @@ SDValue W65816TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
 
   // Create conditional branch: Chain, DestBB, CondCode, Flags
   return DAG.getNode(W65816ISD::BRCOND, DL, MVT::Other, Chain, Dest,
-                     DAG.getConstant(W65CC, DL, MVT::i8), Cmp);
+                     DAG.getConstant(W65CC, DL, MVT::i16), Cmp);
 }
 
 SDValue W65816TargetLowering::LowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
@@ -362,7 +362,7 @@ SDValue W65816TargetLowering::LowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
 
   // Branch if not equal (condition was true/non-zero)
   return DAG.getNode(W65816ISD::BRCOND, DL, MVT::Other, Chain, Dest,
-                     DAG.getConstant(W65816CC::COND_NE, DL, MVT::i8), Cmp);
+                     DAG.getConstant(W65816CC::COND_NE, DL, MVT::i16), Cmp);
 }
 
 SDValue W65816TargetLowering::LowerLoad(SDValue Op, SelectionDAG &DAG) const {

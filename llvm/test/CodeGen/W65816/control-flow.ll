@@ -1,6 +1,5 @@
 ; RUN: llc -march=w65816 < %s | FileCheck %s
-; Test control flow (calls, returns)
-; Note: Conditional branches with icmp have known issues (setcc legalization)
+; Test control flow (calls, returns, conditional branches, loops)
 
 target datalayout = "e-m:e-p:16:16-i16:16-n8:16"
 target triple = "w65816-unknown-none"
@@ -71,4 +70,42 @@ entry:
   br label %loop
 loop:
   br label %loop
+}
+
+;===----------------------------------------------------------------------===
+; Conditional Branches with icmp
+;===----------------------------------------------------------------------===
+
+; CHECK-LABEL: test_cmp_branch:
+; CHECK: bne
+; CHECK: rts
+define i16 @test_cmp_branch(i16 %a, i16 %b) {
+entry:
+  %cmp = icmp eq i16 %a, %b
+  br i1 %cmp, label %then, label %else
+then:
+  ret i16 1
+else:
+  ret i16 0
+}
+
+;===----------------------------------------------------------------------===
+; Simple Loop with Counter
+;===----------------------------------------------------------------------===
+
+; CHECK-LABEL: count_loop:
+; CHECK: .L{{.*}}:
+; CHECK: dec a
+; CHECK: bne .L
+; CHECK: rts
+define i16 @count_loop(i16 %n) {
+entry:
+  br label %loop
+loop:
+  %val = phi i16 [ %n, %entry ], [ %dec, %loop ]
+  %dec = add i16 %val, -1
+  %done = icmp eq i16 %dec, 0
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i16 %val
 }
