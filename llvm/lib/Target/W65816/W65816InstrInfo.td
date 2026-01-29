@@ -1339,13 +1339,14 @@ let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
 // Select16 pseudo - expands to a diamond control flow pattern
 // Operands: dst, trueVal, falseVal, condCode
 // For unsigned/equality conditions, uses usesCustomInserter for early expansion
+// Note: condCode uses i16 because i8 is not a legal type in the backend
 let usesCustomInserter = 1, Uses = [P] in {
   def Select16 : Pseudo<(outs GPR16:$dst),
-                        (ins GPR16:$trueVal, GPR16:$falseVal, i8imm:$cc),
+                        (ins GPR16:$trueVal, GPR16:$falseVal, i16imm:$cc),
                         "# Select16 $dst, $trueVal, $falseVal, $cc",
                         [(set GPR16:$dst,
                           (W65816selectcc GPR16:$trueVal, GPR16:$falseVal,
-                                          (i8 imm:$cc)))]>;
+                                          (i16 imm:$cc)))]>;
 }
 
 // Signed select pseudos - expanded in ExpandPseudo pass (after branch folding)
