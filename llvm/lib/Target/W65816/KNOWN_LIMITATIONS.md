@@ -254,13 +254,15 @@ This enables cross-bank access for SNES development where ROM data is in banks $
 - `lda $123456,x` - **has selection pattern** for far global arrays with variable index
 - `sta $123456,x` - **has selection pattern** for far global arrays with variable index
 
+**Working (implemented for pointer dereference):**
+- Stack-relative indirect: `lda (n,s),y` / `sta (n,s),y` - used for pointer dereference
+  - Pointers in registers are stored to stack slot, then accessed via (offset,S),Y
+  - Supports both 16-bit and 8-bit loads/stores through pointers
+
 **Defined but no selection patterns:**
+- DP indirect: `lda ($dp)` / `sta ($dp),y` - direct page indirect modes
 - DP indirect long: `lda [$dp]` (LDA_dpIndLong defined)
 - DP indirect long indexed: `lda [$dp],y` (LDA_dpIndLongY defined)
-
-**Not Yet Implemented:**
-- Indirect addressing ((dp) / (dp,X) / (dp),Y)
-- Stack-relative indirect ((offset,S),Y)
 
 **Note:** W65816 has no `lda dp,y` or `sta dp,y` instructions - only X-indexed direct page exists.
 For Y-indexed access to zero page arrays, absolute addressing is used as fallback.
