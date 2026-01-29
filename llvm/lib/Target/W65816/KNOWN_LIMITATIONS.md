@@ -280,6 +280,15 @@ will crash. This affects:
 - Select statements (`select i1 %cmp, ...`)
 - Any pattern where i1 is stored or manipulated
 
+**Partial fix implemented:**
+- LowerSETCC: Returns 0 or 1 in i16 via SELECT_CC
+- LowerBRCOND: Compares condition with zero and branches if non-zero
+- setBooleanContents(ZeroOrOneBooleanContent) configured
+
+The remaining issue is somewhere in the DAG legalization pipeline where an i1
+type is still being produced. Full fix requires deeper investigation into how
+LLVM handles the icmp → br i1 pattern vs BR_CC optimization.
+
 ## Completed Phases
 
 - [x] Phase 1: Infrastructure Foundation
