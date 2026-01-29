@@ -101,7 +101,9 @@ private:
 
   SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerSETCC(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerBR_CC(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerBRCOND(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerLoad(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerStore(SDValue Op, SelectionDAG &DAG) const;
 };

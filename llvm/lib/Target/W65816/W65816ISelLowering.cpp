@@ -93,7 +93,9 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   // Branch operations
   setOperationAction(ISD::BR_CC, MVT::i8, Custom);
   setOperationAction(ISD::BR_CC, MVT::i16, Custom);
-  setOperationAction(ISD::BRCOND, MVT::Other, Expand);
+  // BRCOND: br i1 %cond - branch on boolean value
+  // We handle this by converting to our BRCOND node that checks if value is non-zero
+  setOperationAction(ISD::BRCOND, MVT::Other, Custom);
 
   // Select operations
   setOperationAction(ISD::SELECT, MVT::i8, Expand);
@@ -104,9 +106,10 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   // Global addresses need custom lowering
   setOperationAction(ISD::GlobalAddress, MVT::i16, Custom);
 
-  // Set condition code actions
-  setOperationAction(ISD::SETCC, MVT::i8, Expand);
-  setOperationAction(ISD::SETCC, MVT::i16, Expand);
+  // Set condition code actions - use Custom to return i16 (0 or 1)
+  // This is needed so that `br i1` and `select i1` work properly
+  setOperationAction(ISD::SETCC, MVT::i8, Custom);
+  setOperationAction(ISD::SETCC, MVT::i16, Custom);
 
   // Count leading/trailing zeros - expand (no hardware support)
   setOperationAction(ISD::CTLZ, MVT::i16, Expand);
@@ -170,8 +173,12 @@ SDValue W65816TargetLowering::LowerOperation(SDValue Op,
     return LowerGlobalAddress(Op, DAG);
   case ISD::SELECT_CC:
     return LowerSELECT_CC(Op, DAG);
+  case ISD::SETCC:
+    return LowerSETCC(Op, DAG);
   case ISD::BR_CC:
     return LowerBR_CC(Op, DAG);
+  case ISD::BRCOND:
+    return LowerBRCOND(Op, DAG);
   case ISD::LOAD:
     return LowerLoad(Op, DAG);
   case ISD::STORE:
@@ -297,6 +304,29 @@ SDValue W65816TargetLowering::LowerSELECT_CC(SDValue Op,
   return DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
 }
 
+SDValue W65816TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue LHS = Op.getOperand(0);
+  SDValue RHS = Op.getOperand(1);
+  ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(2))->get();
+
+  // Create a comparison node that sets flags
+  SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, LHS, RHS);
+
+  // Get the W65816 condition code for this ISD condition
+  W65816CC::CondCode W65CC = getCondCodeForISD(CC);
+
+  // SETCC returns 1 if true, 0 if false
+  // We implement this as SELECT_CC with constants 1 and 0
+  SDValue TrueVal = DAG.getConstant(1, DL, MVT::i16);
+  SDValue FalseVal = DAG.getConstant(0, DL, MVT::i16);
+
+  SDVTList VTs = DAG.getVTList(MVT::i16, MVT::Glue);
+  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i8), Cmp};
+
+  return DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
+}
+
 SDValue W65816TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue Chain = Op.getOperand(0);
@@ -314,6 +344,25 @@ SDValue W65816TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
   // Create conditional branch: Chain, DestBB, CondCode, Flags
   return DAG.getNode(W65816ISD::BRCOND, DL, MVT::Other, Chain, Dest,
                      DAG.getConstant(W65CC, DL, MVT::i8), Cmp);
+}
+
+SDValue W65816TargetLowering::LowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Chain = Op.getOperand(0);
+  SDValue Cond = Op.getOperand(1);
+  SDValue Dest = Op.getOperand(2);
+
+  // BRCOND: br i1 %cond, label %dest
+  // The condition is a boolean value (0 or 1 in i16)
+  // We convert this to: compare Cond with 0, branch if not equal
+
+  // Compare with zero
+  SDValue Zero = DAG.getConstant(0, DL, MVT::i16);
+  SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, Cond, Zero);
+
+  // Branch if not equal (condition was true/non-zero)
+  return DAG.getNode(W65816ISD::BRCOND, DL, MVT::Other, Chain, Dest,
+                     DAG.getConstant(W65816CC::COND_NE, DL, MVT::i8), Cmp);
 }
 
 SDValue W65816TargetLowering::LowerLoad(SDValue Op, SelectionDAG &DAG) const {
