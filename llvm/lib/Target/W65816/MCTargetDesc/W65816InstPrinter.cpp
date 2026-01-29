@@ -91,3 +91,124 @@ void W65816InstPrinter::printLongAddr(const MCInst *MI, unsigned OpNo,
     OS << "<unknown>";
   }
 }
+
+//===----------------------------------------------------------------------===//
+// Indirect Addressing Mode Print Methods
+//===----------------------------------------------------------------------===//
+
+// Print (addr) - Indirect 16-bit address
+void W65816InstPrinter::printIndirectAddr(const MCInst *MI, unsigned OpNo,
+                                          raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "(";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 4);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << ")";
+}
+
+// Print (addr,x) - Indexed Indirect 16-bit address
+void W65816InstPrinter::printIndirectXAddr(const MCInst *MI, unsigned OpNo,
+                                           raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "(";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 4);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << ",x)";
+}
+
+// Print [addr] - Indirect Long 16-bit address
+void W65816InstPrinter::printIndirectLongAddr(const MCInst *MI, unsigned OpNo,
+                                              raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "[";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 4);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << "]";
+}
+
+// Print (dp) - Indirect Direct Page
+void W65816InstPrinter::printIndirectDP(const MCInst *MI, unsigned OpNo,
+                                        raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "(";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 2);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << ")";
+}
+
+// Print (dp),y - Indirect Direct Page Indexed Y
+void W65816InstPrinter::printIndirectDPY(const MCInst *MI, unsigned OpNo,
+                                         raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "(";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 2);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << "),y";
+}
+
+// Print (dp,x) - Indexed Indirect Direct Page
+void W65816InstPrinter::printIndexedIndirectDP(const MCInst *MI, unsigned OpNo,
+                                               raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "(";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 2);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << ",x)";
+}
+
+// Print [dp] - Indirect Long Direct Page
+void W65816InstPrinter::printIndirectDPLong(const MCInst *MI, unsigned OpNo,
+                                            raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "[";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 2);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << "]";
+}
+
+// Print [dp],y - Indirect Long Direct Page Indexed Y
+void W65816InstPrinter::printIndirectDPLongY(const MCInst *MI, unsigned OpNo,
+                                             raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "[";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 2);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << "],y";
+}
+
+// Print (offset,s),y - Stack Relative Indirect Indexed Y
+void W65816InstPrinter::printStackRelIndirectY(const MCInst *MI, unsigned OpNo,
+                                               raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+  OS << "(";
+  if (Op.isImm()) {
+    OS << "$" << format_hex_no_prefix(Op.getImm(), 2);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  }
+  OS << ",s),y";
+}

@@ -49,7 +49,7 @@ define i16 @load_array_var(i16 %idx) {
 ; CHECK-LABEL: load_indirect:
 ; CHECK: sta {{[0-9]+}},s
 ; CHECK: ldy #0
-; CHECK: lda ({{[0-9]+}},s),y
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rts
 define i16 @load_indirect(ptr %ptr) {
   %val = load i16, ptr %ptr
@@ -57,7 +57,7 @@ define i16 @load_indirect(ptr %ptr) {
 }
 
 ; CHECK-LABEL: store_indirect:
-; CHECK: sta ({{[0-9]+}},s),y
+; CHECK: sta (${{[0-9a-f]+}},s),y
 ; CHECK: rts
 define void @store_indirect(ptr %ptr, i16 %val) {
   store i16 %val, ptr %ptr
@@ -69,9 +69,9 @@ define void @store_indirect(ptr %ptr, i16 %val) {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: double_deref:
-; CHECK: lda ({{[0-9]+}},s),y
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: sta {{[0-9]+}},s
-; CHECK: lda ({{[0-9]+}},s),y
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rts
 define i16 @double_deref(ptr %ptr) {
   %inner_ptr = load ptr, ptr %ptr

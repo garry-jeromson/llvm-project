@@ -24,11 +24,11 @@ target triple = "w65816-unknown-none"
 
 ; CHECK-LABEL: byte_copy:
 ; CHECK: sep #32
-; CHECK: lda ({{[0-9]+}},s),y
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: sep #32
-; CHECK: sta ({{[0-9]+}},s),y
+; CHECK: sta (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: rts
 define void @byte_copy(ptr %src, ptr %dst) {
@@ -47,12 +47,12 @@ define void @byte_copy(ptr %src, ptr %dst) {
 
 ; CHECK-LABEL: byte_increment:
 ; CHECK: sep #32
-; CHECK: lda ({{[0-9]+}},s),y
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: inc a
 ; CHECK: sep #32
-; CHECK: sta ({{[0-9]+}},s),y
+; CHECK: sta (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: rts
 define void @byte_increment(ptr %ptr) {

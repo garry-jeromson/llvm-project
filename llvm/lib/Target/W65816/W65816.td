@@ -81,12 +81,27 @@ defm : RemapAllTargetPseudoPointerOperands<GPR16>;
 def W65816InstrInfo : InstrInfo;
 
 //===----------------------------------------------------------------------===//
-// Assembly Printers
+// Assembly Writers
 //===----------------------------------------------------------------------===//
 
 def W65816AsmWriter : AsmWriter {
   string AsmWriterClassName = "InstPrinter";
   bit isMCAsmWriter = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Assembly Parsers
+//===----------------------------------------------------------------------===//
+
+def W65816AsmParser : AsmParser {
+  let ShouldEmitMatchRegisterAltName = 1;
+}
+
+def W65816AsmParserVariant : AsmParserVariant {
+  int Variant = 0;
+  // 65816 uses '$' prefix for hex immediates, '#' for immediate mode
+  // But we'll support standard syntax too
+  string Name = "W65816";
 }
 
 //===----------------------------------------------------------------------===//
@@ -96,4 +111,6 @@ def W65816AsmWriter : AsmWriter {
 def W65816 : Target {
   let InstructionSet = W65816InstrInfo;
   let AssemblyWriters = [W65816AsmWriter];
+  let AssemblyParsers = [W65816AsmParser];
+  let AssemblyParserVariants = [W65816AsmParserVariant];
 }

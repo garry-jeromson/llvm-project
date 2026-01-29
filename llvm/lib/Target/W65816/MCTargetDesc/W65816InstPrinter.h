@@ -38,6 +38,17 @@ private:
   void printOperand(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
   void printAddrModeMemSrc(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
   void printLongAddr(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+
+  // Indirect addressing mode print methods
+  void printIndirectAddr(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printIndirectXAddr(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printIndirectLongAddr(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printIndirectDP(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printIndirectDPY(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printIndexedIndirectDP(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printIndirectDPLong(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printIndirectDPLongY(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printStackRelIndirectY(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
 };
 
 } // namespace llvm

@@ -13,38 +13,207 @@
 include "W65816InstrFormats.td"
 
 //===----------------------------------------------------------------------===//
+// W65816 AsmOperandClass Definitions (for assembly parsing)
+//===----------------------------------------------------------------------===//
+
+// Immediate operand classes
+def Imm8AsmOperand : AsmOperandClass {
+  let Name = "Imm8";
+  let RenderMethod = "addImmOperands";
+}
+
+def Imm16AsmOperand : AsmOperandClass {
+  let Name = "Imm16";
+  let RenderMethod = "addImmOperands";
+}
+
+// Address operand classes
+def Addr16AsmOperand : AsmOperandClass {
+  let Name = "Addr16";
+  let RenderMethod = "addImmOperands";
+}
+
+def Addr24AsmOperand : AsmOperandClass {
+  let Name = "Addr24";
+  let RenderMethod = "addImmOperands";
+}
+
+def Addr8DPAsmOperand : AsmOperandClass {
+  let Name = "Addr8DP";
+  let RenderMethod = "addImmOperands";
+}
+
+// Branch target operand classes
+def BrTarget8AsmOperand : AsmOperandClass {
+  let Name = "BrTarget8";
+  let RenderMethod = "addImmOperands";
+}
+
+def BrTarget16AsmOperand : AsmOperandClass {
+  let Name = "BrTarget16";
+  let RenderMethod = "addImmOperands";
+}
+
+// Indirect addressing operand classes (with parentheses/brackets as part of operand)
+// These operand classes include the parentheses/brackets in their syntax
+// The parser methods will handle consuming these delimiters
+
+def IndirectAddr16AsmOperand : AsmOperandClass {
+  let Name = "IndirectAddr16";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseIndirectAddr";
+}
+
+def IndirectXAddr16AsmOperand : AsmOperandClass {
+  let Name = "IndirectXAddr16";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseIndirectXAddr";
+}
+
+def IndirectLongAddr16AsmOperand : AsmOperandClass {
+  let Name = "IndirectLongAddr16";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseIndirectLongAddr";
+}
+
+def IndirectDPAsmOperand : AsmOperandClass {
+  let Name = "IndirectDP";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseIndirectDP";
+}
+
+def IndirectDPYAsmOperand : AsmOperandClass {
+  let Name = "IndirectDPY";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseIndirectDPY";
+}
+
+def IndirectDPLongAsmOperand : AsmOperandClass {
+  let Name = "IndirectDPLong";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseIndirectDPLong";
+}
+
+def IndirectDPLongYAsmOperand : AsmOperandClass {
+  let Name = "IndirectDPLongY";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseIndirectDPLongY";
+}
+
+def StackRelIndirectYAsmOperand : AsmOperandClass {
+  let Name = "StackRelIndirectY";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseStackRelIndirectY";
+}
+
+def IndexedIndirectDPAsmOperand : AsmOperandClass {
+  let Name = "IndexedIndirectDP";
+  let RenderMethod = "addImmOperands";
+  let ParserMethod = "parseIndexedIndirectDP";
+}
+
+//===----------------------------------------------------------------------===//
 // W65816 Operand Definitions
 //===----------------------------------------------------------------------===//
 
 // 8-bit immediate operand
-def imm8 : Operand<i8>;
+def imm8 : Operand<i8> {
+  let ParserMatchClass = Imm8AsmOperand;
+}
 
 // 16-bit immediate operand
-def imm16 : Operand<i16>;
+def imm16 : Operand<i16> {
+  let ParserMatchClass = Imm16AsmOperand;
+}
 
 // 24-bit long address operand (stored in i32, high 8 bits ignored)
 // Used for absolute long addressing to access any bank
 def addr24 : Operand<i32> {
   let PrintMethod = "printLongAddr";
+  let ParserMatchClass = Addr24AsmOperand;
 }
 
 // 16-bit absolute address operand
 def addr16 : Operand<i16> {
   let PrintMethod = "printAddrModeMemSrc";
+  let ParserMatchClass = Addr16AsmOperand;
 }
 
 // 8-bit direct page address operand
 def addr8dp : Operand<i8> {
   let PrintMethod = "printAddrModeMemSrc";
+  let ParserMatchClass = Addr8DPAsmOperand;
 }
 
 // PC-relative offset for branches
 def brtarget8 : Operand<OtherVT> {
   let EncoderMethod = "encodePCRelImm";
+  let ParserMatchClass = BrTarget8AsmOperand;
 }
 
 def brtarget16 : Operand<OtherVT> {
   let EncoderMethod = "encodePCRelImm16";
+  let ParserMatchClass = BrTarget16AsmOperand;
+}
+
+//===----------------------------------------------------------------------===//
+// Indirect Addressing Operand Definitions
+//===----------------------------------------------------------------------===//
+// These operands include the parentheses/brackets in their syntax.
+// The parser methods consume the delimiters, and print methods add them back.
+
+// Indirect 16-bit address: (addr)
+def indaddr16 : Operand<i16> {
+  let PrintMethod = "printIndirectAddr";
+  let ParserMatchClass = IndirectAddr16AsmOperand;
+}
+
+// Indexed Indirect 16-bit address: (addr,x)
+def indXaddr16 : Operand<i16> {
+  let PrintMethod = "printIndirectXAddr";
+  let ParserMatchClass = IndirectXAddr16AsmOperand;
+}
+
+// Indirect Long 16-bit address: [addr]
+def indLaddr16 : Operand<i16> {
+  let PrintMethod = "printIndirectLongAddr";
+  let ParserMatchClass = IndirectLongAddr16AsmOperand;
+}
+
+// Indirect Direct Page: (dp)
+def inddp : Operand<i8> {
+  let PrintMethod = "printIndirectDP";
+  let ParserMatchClass = IndirectDPAsmOperand;
+}
+
+// Indirect Direct Page Indexed Y: (dp),y
+def inddpY : Operand<i8> {
+  let PrintMethod = "printIndirectDPY";
+  let ParserMatchClass = IndirectDPYAsmOperand;
+}
+
+// Indirect Long Direct Page: [dp]
+def indLdp : Operand<i8> {
+  let PrintMethod = "printIndirectDPLong";
+  let ParserMatchClass = IndirectDPLongAsmOperand;
+}
+
+// Indirect Long Direct Page Indexed Y: [dp],y
+def indLdpY : Operand<i8> {
+  let PrintMethod = "printIndirectDPLongY";
+  let ParserMatchClass = IndirectDPLongYAsmOperand;
+}
+
+// Stack Relative Indirect Indexed Y: (offset,s),y
+def srIndY : Operand<i8> {
+  let PrintMethod = "printStackRelIndirectY";
+  let ParserMatchClass = StackRelIndirectYAsmOperand;
+}
+
+// Indexed Indirect Direct Page: (dp,x)
+def indXdp : Operand<i8> {
+  let PrintMethod = "printIndexedIndirectDP";
+  let ParserMatchClass = IndexedIndirectDPAsmOperand;
 }
 
 //===----------------------------------------------------------------------===//
@@ -256,35 +425,35 @@ def STA_dpX : W65816Inst16<0x95, (outs), (ins ACC16:$src, addr8dp:$imm),
 
 let Defs = [P] in {
   // LDA (dp) - Load from address stored at direct page location
-  def LDA_dpInd : W65816Inst16<0xB2, (outs ACC16:$dst), (ins addr8dp:$imm),
-                               "lda\t($imm)", []>;
+  def LDA_dpInd : W65816Inst16<0xB2, (outs ACC16:$dst), (ins inddp:$imm),
+                               "lda\t$imm", []>;
 
   // LDA (dp),Y - Load from (address at dp) + Y
-  def LDA_dpIndY : W65816Inst16<0xB1, (outs ACC16:$dst), (ins addr8dp:$imm),
-                                "lda\t($imm),y", []> {
+  def LDA_dpIndY : W65816Inst16<0xB1, (outs ACC16:$dst), (ins inddpY:$imm),
+                                "lda\t$imm", []> {
     let Uses = [Y];
   }
 
   // LDA (dp,X) - Load from address at (dp + X)
-  def LDA_dpXInd : W65816Inst16<0xA1, (outs ACC16:$dst), (ins addr8dp:$imm),
-                                "lda\t($imm,x)", []> {
+  def LDA_dpXInd : W65816Inst16<0xA1, (outs ACC16:$dst), (ins indXdp:$imm),
+                                "lda\t$imm", []> {
     let Uses = [X];
   }
 }
 
 // STA (dp) - Store to address stored at direct page location
-def STA_dpInd : W65816Inst16<0x92, (outs), (ins ACC16:$src, addr8dp:$imm),
-                             "sta\t($imm)", []>;
+def STA_dpInd : W65816Inst16<0x92, (outs), (ins ACC16:$src, inddp:$imm),
+                             "sta\t$imm", []>;
 
 // STA (dp),Y - Store to (address at dp) + Y
-def STA_dpIndY : W65816Inst16<0x91, (outs), (ins ACC16:$src, addr8dp:$imm),
-                              "sta\t($imm),y", []> {
+def STA_dpIndY : W65816Inst16<0x91, (outs), (ins ACC16:$src, inddpY:$imm),
+                              "sta\t$imm", []> {
   let Uses = [Y];
 }
 
 // STA (dp,X) - Store to address at (dp + X)
-def STA_dpXInd : W65816Inst16<0x81, (outs), (ins ACC16:$src, addr8dp:$imm),
-                              "sta\t($imm,x)", []> {
+def STA_dpXInd : W65816Inst16<0x81, (outs), (ins ACC16:$src, indXdp:$imm),
+                              "sta\t$imm", []> {
   let Uses = [X];
 }
 
@@ -298,16 +467,16 @@ def STA_dpXInd : W65816Inst16<0x81, (outs), (ins ACC16:$src, addr8dp:$imm),
 let Defs = [P] in {
   // LDA (offset,S),Y - Load from (address at SP+offset) + Y
   // This is the key instruction for *ptr or ptr[i] where ptr is a local var
-  def LDA_srIndY : W65816Inst16<0xB3, (outs ACC16:$dst), (ins imm8:$imm),
-                                "lda\t($imm,s),y", []> {
+  def LDA_srIndY : W65816Inst16<0xB3, (outs ACC16:$dst), (ins srIndY:$imm),
+                                "lda\t$imm", []> {
     let Uses = [Y];
     let mayLoad = 1;
   }
 }
 
 // STA (offset,S),Y - Store to (address at SP+offset) + Y
-def STA_srIndY : W65816Inst16<0x93, (outs), (ins ACC16:$src, imm8:$imm),
-                              "sta\t($imm,s),y", []> {
+def STA_srIndY : W65816Inst16<0x93, (outs), (ins ACC16:$src, srIndY:$imm),
+                              "sta\t$imm", []> {
   let Uses = [Y];
   let mayStore = 1;
 }
@@ -359,15 +528,15 @@ def STA_longX : W65816Inst32<0x9F, (outs), (ins ACC16:$src, addr24:$addr),
 let Defs = [P] in {
   // LDA [$dp] - Load through 24-bit pointer at direct page location
   // Opcode: 0xA7, 2 bytes: [A7][dp_offset]
-  def LDA_dpIndLong : W65816Inst16<0xA7, (outs ACC16:$dst), (ins addr8dp:$imm),
-                                   "lda\t[$imm]", []> {
+  def LDA_dpIndLong : W65816Inst16<0xA7, (outs ACC16:$dst), (ins indLdp:$imm),
+                                   "lda\t$imm", []> {
     let mayLoad = 1;
   }
 
   // LDA [$dp],Y - Load through 24-bit pointer + Y offset
   // Opcode: 0xB7, 2 bytes
-  def LDA_dpIndLongY : W65816Inst16<0xB7, (outs ACC16:$dst), (ins addr8dp:$imm),
-                                    "lda\t[$imm],y", []> {
+  def LDA_dpIndLongY : W65816Inst16<0xB7, (outs ACC16:$dst), (ins indLdpY:$imm),
+                                    "lda\t$imm", []> {
     let Uses = [Y];
     let mayLoad = 1;
   }
@@ -375,15 +544,15 @@ let Defs = [P] in {
 
 // STA [$dp] - Store through 24-bit pointer at direct page location
 // Opcode: 0x87, 2 bytes
-def STA_dpIndLong : W65816Inst16<0x87, (outs), (ins ACC16:$src, addr8dp:$imm),
-                                 "sta\t[$imm]", []> {
+def STA_dpIndLong : W65816Inst16<0x87, (outs), (ins ACC16:$src, indLdp:$imm),
+                                 "sta\t$imm", []> {
   let mayStore = 1;
 }
 
 // STA [$dp],Y - Store through 24-bit pointer + Y offset
 // Opcode: 0x97, 2 bytes
-def STA_dpIndLongY : W65816Inst16<0x97, (outs), (ins ACC16:$src, addr8dp:$imm),
-                                  "sta\t[$imm],y", []> {
+def STA_dpIndLongY : W65816Inst16<0x97, (outs), (ins ACC16:$src, indLdpY:$imm),
+                                  "sta\t$imm", []> {
   let Uses = [Y];
   let mayStore = 1;
 }
@@ -1087,20 +1256,20 @@ let isBarrier = 1, isBranch = 1, isTerminator = 1 in {
 
   // JMP - Jump Absolute Indirect
   // Jump through pointer at specified address
-  def JMP_ind : W65816Inst24<0x6C, (outs), (ins addr16:$addr),
-                             "jmp\t($addr)", []>;
+  def JMP_ind : W65816Inst24<0x6C, (outs), (ins indaddr16:$addr),
+                             "jmp\t$addr", []>;
 
   // JMP - Jump Absolute Indexed Indirect
   // Jump through pointer at (address + X) - useful for jump tables
-  def JMP_indX : W65816Inst24<0x7C, (outs), (ins addr16:$addr),
-                              "jmp\t($addr,x)", []> {
+  def JMP_indX : W65816Inst24<0x7C, (outs), (ins indXaddr16:$addr),
+                              "jmp\t$addr", []> {
     let Uses = [X];
   }
 
   // JMP - Jump Absolute Indirect Long (24-bit)
   // Jump through 24-bit pointer at specified address
-  def JMP_indL : W65816Inst24<0xDC, (outs), (ins addr16:$addr),
-                              "jmp\t[$addr]", []>;
+  def JMP_indL : W65816Inst24<0xDC, (outs), (ins indLaddr16:$addr),
+                              "jmp\t$addr", []>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1308,8 +1477,8 @@ def PEA : W65816Inst24<0xF4, (outs), (ins addr16:$addr),
 // PEI - Push Effective Indirect Address
 // Pushes 16-bit value from direct page location onto stack
 let Defs = [SP], Uses = [SP], mayLoad = 1, mayStore = 1 in
-def PEI : W65816Inst16<0xD4, (outs), (ins imm8:$imm),
-                       "pei\t($imm)", []>;
+def PEI : W65816Inst16<0xD4, (outs), (ins inddp:$imm),
+                       "pei\t$imm", []>;
 
 // PER - Push Effective PC Relative Address
 // Pushes PC + signed 16-bit offset onto stack

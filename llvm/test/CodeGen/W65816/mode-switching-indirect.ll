@@ -26,7 +26,7 @@ target triple = "w65816-unknown-none"
 ; CHECK: sta {{[0-9]+}},s
 ; CHECK: sep #32
 ; CHECK: ldy #0
-; CHECK: lda ({{[0-9]+}},s),y
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: rts
@@ -51,7 +51,7 @@ define i16 @load_byte_indirect(ptr %ptr) {
 ; CHECK: sta {{[0-9]+}},s
 ; CHECK: sep #32
 ; CHECK: ldy #0
-; CHECK: sta ({{[0-9]+}},s),y
+; CHECK: sta (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: rts
 define void @store_byte_indirect(ptr %ptr, i16 %val) {
@@ -75,7 +75,7 @@ define void @store_byte_indirect(ptr %ptr, i16 %val) {
 
 ; CHECK-LABEL: load_byte_indexed:
 ; CHECK: sep #32
-; CHECK: lda ({{[0-9]+}},s),y
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: rts
@@ -100,7 +100,7 @@ define i16 @load_byte_indexed(ptr %ptr, i16 %idx) {
 
 ; CHECK-LABEL: store_byte_indexed:
 ; CHECK: sep #32
-; CHECK: sta ({{[0-9]+}},s),y
+; CHECK: sta (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: rts
 define void @store_byte_indexed(ptr %ptr, i16 %idx, i16 %val) {

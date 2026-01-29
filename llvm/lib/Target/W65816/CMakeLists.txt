@@ -2,6 +2,7 @@ add_llvm_component_group(W65816)
 
 set(LLVM_TARGET_DEFINITIONS W65816.td)
 
+tablegen(LLVM W65816GenAsmMatcher.inc -gen-asm-matcher)
 tablegen(LLVM W65816GenAsmWriter.inc -gen-asm-writer)
 tablegen(LLVM W65816GenCallingConv.inc -gen-callingconv)
 tablegen(LLVM W65816GenDAGISel.inc -gen-dag-isel)
@@ -48,5 +49,6 @@ add_llvm_target(W65816CodeGen
   W65816
   )
 
+add_subdirectory(AsmParser)
 add_subdirectory(MCTargetDesc)
 add_subdirectory(TargetInfo)
