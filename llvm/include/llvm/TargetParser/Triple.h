@@ -110,7 +110,8 @@ public:
     renderscript32, // 32-bit RenderScript
     renderscript64, // 64-bit RenderScript
     ve,             // NEC SX-Aurora Vector Engine
-    LastArchType = ve
+    w65816,         // WDC 65816: 16-bit extension of 6502
+    LastArchType = w65816
   };
   enum SubArchType {
     NoSubArch,

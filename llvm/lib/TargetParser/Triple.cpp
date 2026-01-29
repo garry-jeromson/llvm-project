@@ -82,6 +82,7 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
   case thumb:          return "thumb";
   case thumbeb:        return "thumbeb";
   case ve:             return "ve";
+  case w65816:         return "w65816";
   case wasm32:         return "wasm32";
   case wasm64:         return "wasm64";
   case x86:            return "i386";
@@ -515,6 +516,7 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
       .Case("renderscript32", renderscript32)
       .Case("renderscript64", renderscript64)
       .Case("ve", ve)
+      .Case("w65816", w65816)
       .Case("csky", csky)
       .Case("loongarch32", loongarch32)
       .Case("loongarch64", loongarch64)
@@ -662,6 +664,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
           .Case("renderscript64", Triple::renderscript64)
           .Case("shave", Triple::shave)
           .Case("ve", Triple::ve)
+          .Case("w65816", Triple::w65816)
           .Case("wasm32", Triple::wasm32)
           .Case("wasm64", Triple::wasm64)
           .Case("csky", Triple::csky)
@@ -1029,6 +1032,7 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
   case Triple::tcele:
   case Triple::thumbeb:
   case Triple::ve:
+  case Triple::w65816:
   case Triple::xcore:
   case Triple::xtensa:
     return Triple::ELF;
@@ -1720,6 +1724,7 @@ unsigned Triple::getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
 
   case llvm::Triple::avr:
   case llvm::Triple::msp430:
+  case llvm::Triple::w65816:
     return 16;
 
   case llvm::Triple::aarch64_32:
@@ -1829,6 +1834,7 @@ Triple Triple::get32BitArchVariant() const {
   case Triple::msp430:
   case Triple::systemz:
   case Triple::ve:
+  case Triple::w65816:
     T.setArch(UnknownArch);
     break;
 
@@ -1919,6 +1925,7 @@ Triple Triple::get64BitArchVariant() const {
   case Triple::sparcel:
   case Triple::tce:
   case Triple::tcele:
+  case Triple::w65816:
   case Triple::xcore:
   case Triple::xtensa:
     T.setArch(UnknownArch);
@@ -2020,6 +2027,7 @@ Triple Triple::getBigEndianArchVariant() const {
   case Triple::x86_64:
   case Triple::xcore:
   case Triple::ve:
+  case Triple::w65816:
   case Triple::csky:
   case Triple::xtensa:
 
@@ -2137,6 +2145,7 @@ bool Triple::isLittleEndian() const {
   case Triple::tcele:
   case Triple::thumb:
   case Triple::ve:
+  case Triple::w65816:
   case Triple::wasm32:
   case Triple::wasm64:
   case Triple::x86:
