@@ -27,6 +27,35 @@ define i16 @call_with_two_args(i16 %a, i16 %b) {
   ret i16 %r
 }
 
+; CHECK-LABEL: call_with_three_args:
+; CHECK: jsr external_func3
+; CHECK: rts
+declare i16 @external_func3(i16, i16, i16)
+define i16 @call_with_three_args(i16 %a, i16 %b, i16 %c) {
+  %r = call i16 @external_func3(i16 %a, i16 %b, i16 %c)
+  ret i16 %r
+}
+
+; Test 4 arguments - 4th arg goes on stack
+; CHECK-LABEL: call_with_four_args:
+; CHECK: jsr external_func4
+; CHECK: rts
+declare i16 @external_func4(i16, i16, i16, i16)
+define i16 @call_with_four_args(i16 %a, i16 %b, i16 %c, i16 %d) {
+  %r = call i16 @external_func4(i16 %a, i16 %b, i16 %c, i16 %d)
+  ret i16 %r
+}
+
+; Test 5 arguments - 4th and 5th on stack
+; CHECK-LABEL: call_with_five_args:
+; CHECK: jsr external_func5
+; CHECK: rts
+declare i16 @external_func5(i16, i16, i16, i16, i16)
+define i16 @call_with_five_args(i16 %a, i16 %b, i16 %c, i16 %d, i16 %e) {
+  %r = call i16 @external_func5(i16 %a, i16 %b, i16 %c, i16 %d, i16 %e)
+  ret i16 %r
+}
+
 ;===----------------------------------------------------------------------===
 ; Return Values
 ;===----------------------------------------------------------------------===

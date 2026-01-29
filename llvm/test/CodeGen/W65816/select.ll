@@ -47,3 +47,6 @@ define i16 @select_const(i16 %a, i16 %b) {
   %result = select i1 %cmp, i16 42, i16 0
   ret i16 %result
 }
+
+; NOTE: Signed select operations (slt, sgt, sle, sge) and raw i1 select
+; cause issues in pseudo expansion. See KNOWN_LIMITATIONS.md
