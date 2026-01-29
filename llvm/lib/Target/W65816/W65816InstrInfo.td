@@ -432,6 +432,43 @@ let Defs = [P] in {
 }
 
 //===----------------------------------------------------------------------===//
+// BIT - Test Memory Bits Against Accumulator
+// Sets Z based on (A AND memory), sets N/V from memory bits (except immediate)
+//===----------------------------------------------------------------------===//
+
+let Defs = [P], Uses = [A], hasSideEffects = 0 in {
+  // BIT immediate - only affects Z flag (N/V unaffected)
+  def BIT_imm16 : W65816Inst24<0x89, (outs), (ins imm16:$addr),
+                               "bit\t#$addr", []>;
+
+  // BIT absolute - sets Z from AND, N from bit 15, V from bit 14
+  def BIT_abs : W65816Inst24<0x2C, (outs), (ins addr16:$addr),
+                             "bit\t$addr", []> {
+    let mayLoad = 1;
+  }
+
+  // BIT direct page
+  def BIT_dp : W65816Inst16<0x24, (outs), (ins addr8dp:$imm),
+                            "bit\t$imm", []> {
+    let mayLoad = 1;
+  }
+
+  // BIT absolute,X
+  def BIT_absX : W65816Inst24<0x3C, (outs), (ins addr16:$addr),
+                              "bit\t$addr,x", []> {
+    let mayLoad = 1;
+    let Uses = [A, X];
+  }
+
+  // BIT direct page,X
+  def BIT_dpX : W65816Inst16<0x34, (outs), (ins addr8dp:$imm),
+                             "bit\t$imm,x", []> {
+    let mayLoad = 1;
+    let Uses = [A, X];
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Shift and Rotate Instructions
 //===----------------------------------------------------------------------===//
 
@@ -612,7 +649,59 @@ let Defs = [P] in {
     let Defs = [Y, P];
     let Uses = [Y];
   }
+}
 
+//===----------------------------------------------------------------------===//
+// Memory Increment/Decrement Instructions (read-modify-write)
+//===----------------------------------------------------------------------===//
+
+// INC - Increment (memory)
+let Defs = [P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
+  // INC absolute
+  def INC_abs : W65816Inst24<0xEE, (outs), (ins addr16:$addr),
+                             "inc\t$addr", []>;
+
+  // INC direct page
+  def INC_dp : W65816Inst16<0xE6, (outs), (ins addr8dp:$imm),
+                            "inc\t$imm", []>;
+
+  // INC absolute,X
+  def INC_absX : W65816Inst24<0xFE, (outs), (ins addr16:$addr),
+                              "inc\t$addr,x", []> {
+    let Uses = [X];
+  }
+
+  // INC direct page,X
+  def INC_dpX : W65816Inst16<0xF6, (outs), (ins addr8dp:$imm),
+                             "inc\t$imm,x", []> {
+    let Uses = [X];
+  }
+}
+
+// DEC - Decrement (memory)
+let Defs = [P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
+  // DEC absolute
+  def DEC_abs : W65816Inst24<0xCE, (outs), (ins addr16:$addr),
+                             "dec\t$addr", []>;
+
+  // DEC direct page
+  def DEC_dp : W65816Inst16<0xC6, (outs), (ins addr8dp:$imm),
+                            "dec\t$imm", []>;
+
+  // DEC absolute,X
+  def DEC_absX : W65816Inst24<0xDE, (outs), (ins addr16:$addr),
+                              "dec\t$addr,x", []> {
+    let Uses = [X];
+  }
+
+  // DEC direct page,X
+  def DEC_dpX : W65816Inst16<0xD6, (outs), (ins addr8dp:$imm),
+                             "dec\t$imm,x", []> {
+    let Uses = [X];
+  }
+}
+
+let Defs = [P] in {
   // INC16 - Increment any GPR16 register
   // Expanded to INC_A, INX, or INY based on allocated register
   def INC16 : Pseudo<(outs GPR16:$dst), (ins GPR16:$src),

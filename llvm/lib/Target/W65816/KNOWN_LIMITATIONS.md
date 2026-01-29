@@ -63,6 +63,30 @@ manual assembly. The compiler uses load-shift-store sequences.
 Shift amounts now use i16 consistently. `getScalarShiftAmountTy()` returns MVT::i16
 (matching the fact that i8 is not a legal type), and all shift patterns use i16.
 
+### BIT Instruction
+**All modes defined:**
+- Immediate: `BIT #$const` - tests bits, only sets Z flag
+- Absolute: `BIT $addr` - sets Z from A AND mem, N/V from memory bits
+- Direct page: `BIT $dp`
+- Absolute indexed X: `BIT $addr,x`
+- DP indexed X: `BIT $dp,x`
+
+Note: BIT is a specialized instruction that tests bits without modifying the
+accumulator. It's typically used before conditional branches.
+
+### INC/DEC Instructions
+**Accumulator mode (working):**
+- `INC A`, `DEC A` - increment/decrement accumulator
+
+**Memory modes (defined, no selection patterns):**
+- Absolute: `INC $addr`, `DEC $addr`
+- Direct page: `INC $dp`, `DEC $dp`
+- Absolute indexed X: `INC $addr,x`, `DEC $addr,x`
+- DP indexed X: `INC $dp,x`, `DEC $dp,x`
+
+Note: Memory increment/decrement instructions are defined but require intrinsics
+or manual assembly. The compiler uses load-add-store sequences.
+
 ### 8/16-bit Mode Switching
 - Currently assumes 16-bit mode throughout
 - No support for dynamic M/X flag changes
