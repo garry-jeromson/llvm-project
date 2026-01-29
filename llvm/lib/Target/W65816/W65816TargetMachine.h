@@ -40,6 +40,10 @@ public:
     return TLOF.get();
   }
 
+  MachineFunctionInfo *
+  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
+                            const TargetSubtargetInfo *STI) const override;
+
 private:
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   W65816Subtarget Subtarget;

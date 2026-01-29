@@ -14,6 +14,7 @@
 
 #include "W65816.h"
 #include "W65816InstrInfo.h"
+#include "W65816MachineFunctionInfo.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
@@ -48,12 +49,30 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
   MachineFrameInfo &MFI = MF.getFrameInfo();
   const W65816Subtarget &STI = MF.getSubtarget<W65816Subtarget>();
   const W65816InstrInfo &TII = *STI.getInstrInfo();
+  const W65816MachineFunctionInfo *AFI =
+      MF.getInfo<W65816MachineFunctionInfo>();
   MachineBasicBlock::iterator MBBI = MBB.begin();
   DebugLoc DL;
 
   // Skip any debug instructions at the beginning
   while (MBBI != MBB.end() && MBBI->isDebugInstr())
     ++MBBI;
+
+  // For interrupt handlers, save all registers first
+  // The 65816 interrupt sequence automatically pushes P and PC,
+  // but we need to save A, X, Y ourselves
+  if (AFI->isInterruptOrNMIHandler()) {
+    // Save A, X, Y (P is already saved by hardware on interrupt entry)
+    // Use REP #$30 first to ensure we're in 16-bit mode for saving
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::REP)).addImm(0x30)
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PHA))
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PHX))
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PHY))
+        .setMIFlag(MachineInstr::FrameSetup);
+  }
 
   // Set processor mode based on subtarget features
   // This ensures the hardware mode matches what the compiler expects
@@ -128,6 +147,8 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
   MachineFrameInfo &MFI = MF.getFrameInfo();
   const W65816Subtarget &STI = MF.getSubtarget<W65816Subtarget>();
   const W65816InstrInfo &TII = *STI.getInstrInfo();
+  const W65816MachineFunctionInfo *AFI =
+      MF.getInfo<W65816MachineFunctionInfo>();
 
   MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
   DebugLoc DL;
@@ -137,7 +158,8 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
 
   uint64_t StackSize = MFI.getStackSize();
 
-  if (StackSize == 0)
+  // For interrupt handlers with no stack allocation, still need to restore regs
+  if (StackSize == 0 && !AFI->isInterruptOrNMIHandler())
     return;
 
   // Restore the stack pointer by adding back the stack size
@@ -186,6 +208,24 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
 
     // Restore return value (A) - now it's at offset 1 from SP
     BuildMI(MBB, MBBI, DL, TII.get(W65816::PLA));
+  }
+
+  // For interrupt handlers, restore saved registers
+  // Note: RTI (instead of RTS) is handled in ExpandPseudo pass
+  if (AFI->isInterruptOrNMIHandler()) {
+    // Re-get the terminator position after any stack cleanup
+    MachineBasicBlock::iterator TermMBBI = MBB.getFirstTerminator();
+
+    // Ensure we're in 16-bit mode for restoring
+    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::REP)).addImm(0x30)
+        .setMIFlag(MachineInstr::FrameDestroy);
+    // Restore Y, X, A (reverse order of save)
+    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::PLY))
+        .setMIFlag(MachineInstr::FrameDestroy);
+    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::PLX))
+        .setMIFlag(MachineInstr::FrameDestroy);
+    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::PLA))
+        .setMIFlag(MachineInstr::FrameDestroy);
   }
 }
 

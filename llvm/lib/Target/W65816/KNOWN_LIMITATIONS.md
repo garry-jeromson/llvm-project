@@ -337,7 +337,22 @@ pla           ; deallocate 4 bytes
 ### Low Priority
 1. ~~8-bit mode support~~ (DONE - compile-time feature flags +acc8bit, +idx8bit)
 2. ~~Long (24-bit) addressing~~ (DONE - for globals in .fardata, .rodata, .romdata)
-3. Interrupt handling
+3. ~~Interrupt handling~~ (DONE - use `__attribute__((interrupt))`)
+
+### Interrupt Handling
+Functions can be marked as interrupt handlers using the `interrupt` attribute:
+```c
+__attribute__((interrupt))
+void irq_handler(void) {
+    // Handle interrupt
+}
+```
+
+Interrupt handlers have special prologue/epilogue:
+- **Prologue**: `rep #48` (ensure 16-bit mode), `pha`, `phx`, `phy` (save all registers)
+- **Epilogue**: `rep #48`, `ply`, `plx`, `pla` (restore registers), `rti` (return from interrupt)
+
+Note: The 65816 hardware automatically saves the processor status (P) and program counter (PC) on interrupt entry. The prologue saves A, X, Y which the compiler may use.
 
 ## Test Cases That Fail
 

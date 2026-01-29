@@ -13,6 +13,7 @@
 #include "W65816TargetMachine.h"
 
 #include "W65816.h"
+#include "W65816MachineFunctionInfo.h"
 #include "W65816TargetObjectFile.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
 #include "TargetInfo/W65816TargetInfo.h"
@@ -91,6 +92,13 @@ void W65816PassConfig::addPreEmitPass() {
   addPass(createW65816ExpandPseudoPass());
   // Add branch relaxation pass before emission
   addPass(&BranchRelaxationPassID);
+}
+
+MachineFunctionInfo *W65816TargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+  return W65816MachineFunctionInfo::create<W65816MachineFunctionInfo>(
+      Allocator, F, STI);
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeW65816Target() {

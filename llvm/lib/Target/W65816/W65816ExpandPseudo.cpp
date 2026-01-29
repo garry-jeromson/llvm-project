@@ -14,6 +14,7 @@
 
 #include "W65816.h"
 #include "W65816InstrInfo.h"
+#include "W65816MachineFunctionInfo.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
@@ -263,9 +264,18 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
 }
 
 bool W65816ExpandPseudo::expandRETW(Block &MBB, BlockIt MBBI) {
-  // Expand RETW to RTS (Return from Subroutine)
+  MachineFunction &MF = *MBB.getParent();
+  const W65816MachineFunctionInfo *AFI =
+      MF.getInfo<W65816MachineFunctionInfo>();
+
+  // For interrupt handlers, use RTI (Return from Interrupt)
+  // For normal functions, use RTS (Return from Subroutine)
   // For long calls, this would be RTL instead
-  buildMI(MBB, MBBI, W65816::RTS);
+  if (AFI->isInterruptOrNMIHandler()) {
+    buildMI(MBB, MBBI, W65816::RTI);
+  } else {
+    buildMI(MBB, MBBI, W65816::RTS);
+  }
 
   // Remove the pseudo instruction
   MBBI->eraseFromParent();
