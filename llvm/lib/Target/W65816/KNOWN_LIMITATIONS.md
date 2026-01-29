@@ -43,7 +43,16 @@ This document tracks known limitations and areas for future improvement.
 ## General Architecture Limitations
 
 ### No Hardware Multiply/Divide
-- MUL, DIV, REM all expand to library calls (not yet implemented)
+- MUL, DIV, REM expand to library calls (implemented!)
+  - MUL i16 → `__mulhi3`
+  - SDIV i16 → `__divhi3`
+  - UDIV i16 → `__udivhi3`
+  - SREM i16 → `__modhi3`
+  - UREM i16 → `__umodhi3`
+- A runtime library is provided in `lib/Target/W65816/runtime/w65816_runtime.s`
+  - Assemble with ca65: `ca65 --cpu 65816 -o w65816_runtime.o w65816_runtime.s`
+  - Link the object file with your compiled code
+  - See `runtime/README.md` for details
 - Shift by constant amount: Works! Expands to multiple ASL/LSR/ROR instructions
 - Shift by variable amount: Works! Uses loop with DEX/BNE
 

@@ -2774,6 +2774,17 @@ def LanaiSystemLibrary
 }
 
 //===----------------------------------------------------------------------===//
+// W65816 Runtime Libcalls
+//===----------------------------------------------------------------------===//
+
+def isW65816 : RuntimeLibcallPredicate<"TT.getArch() == Triple::w65816">;
+
+// W65816 uses standard GCC-style libcalls for integer math operations
+// No floating point support - this is a simple 16-bit CPU
+def W65816SystemLibrary
+    : SystemRuntimeLibrary<isW65816, (add DefaultRuntimeLibcallImpls)>;
+
+//===----------------------------------------------------------------------===//
 // Mips16 Runtime Libcalls
 //===----------------------------------------------------------------------===//
 
