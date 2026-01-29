@@ -48,5 +48,38 @@ define i16 @select_const(i16 %a, i16 %b) {
   ret i16 %result
 }
 
-; NOTE: Signed select operations (slt, sgt, sle, sge) and raw i1 select
-; cause issues in pseudo expansion. See KNOWN_LIMITATIONS.md
+;===----------------------------------------------------------------------===
+; Signed Comparisons
+;===----------------------------------------------------------------------===
+
+; CHECK-LABEL: min_signed:
+; CHECK: rts
+define i16 @min_signed(i16 %a, i16 %b) {
+  %cmp = icmp slt i16 %a, %b
+  %result = select i1 %cmp, i16 %a, i16 %b
+  ret i16 %result
+}
+
+; CHECK-LABEL: max_signed:
+; CHECK: rts
+define i16 @max_signed(i16 %a, i16 %b) {
+  %cmp = icmp sgt i16 %a, %b
+  %result = select i1 %cmp, i16 %a, i16 %b
+  ret i16 %result
+}
+
+; CHECK-LABEL: select_sle:
+; CHECK: rts
+define i16 @select_sle(i16 %a, i16 %b, i16 %c) {
+  %cmp = icmp sle i16 %a, %b
+  %result = select i1 %cmp, i16 %a, i16 %c
+  ret i16 %result
+}
+
+; CHECK-LABEL: select_sge:
+; CHECK: rts
+define i16 @select_sge(i16 %a, i16 %b, i16 %c) {
+  %cmp = icmp sge i16 %a, %b
+  %result = select i1 %cmp, i16 %a, i16 %c
+  ret i16 %result
+}

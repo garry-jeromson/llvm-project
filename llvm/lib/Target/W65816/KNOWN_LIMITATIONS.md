@@ -21,13 +21,12 @@ This document tracks known limitations and areas for future improvement.
 ## Phase 3: Control Flow
 
 ### Condition Code Mapping
-- **Signed comparisons (sgt, slt, sge, sle)**: Working for branches with multi-instruction sequences
+- **Signed comparisons (sgt, slt, sge, sle)**: Now working correctly with multi-instruction sequences
   - `SETLT` (N != V): BVS/BMI/BRA/BPL sequence
   - `SETGE` (N == V): BVS/BPL/BRA/BMI sequence
   - `SETGT` (Z==0 && N==V): BEQ then N==V check
   - `SETLE` (Z==1 || N!=V): BEQ then N!=V check
-  - **CRASH**: Signed SELECT_CC (select with slt/sgt/sle/sge) crashes during pseudo expansion
-  - Workaround: Use explicit branches instead of select for signed comparisons
+  - Signed SELECT_CC also works via Select16_SLT/SGE/SGT/SLE pseudos
 
 - **Unsigned comparisons**: Work correctly via carry flag
   - `SETUGE` → BCS (correct)

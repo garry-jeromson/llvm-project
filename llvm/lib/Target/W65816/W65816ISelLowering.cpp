@@ -531,6 +531,35 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   const TargetInstrInfo &TII = *Subtarget.getInstrInfo();
   DebugLoc DL = MI.getDebugLoc();
 
+  // Get operands first to check condition type
+  Register DstReg = MI.getOperand(0).getReg();
+  Register TrueReg = MI.getOperand(1).getReg();
+  Register FalseReg = MI.getOperand(2).getReg();
+  W65816CC::CondCode CondCode = (W65816CC::CondCode)MI.getOperand(3).getImm();
+
+  // Handle signed conditions by emitting a signed select pseudo
+  // These pseudos are expanded later (in ExpandPseudo pass) to avoid
+  // the branch folder breaking the multi-instruction sequences
+  unsigned SignedSelectOpc = 0;
+  switch (CondCode) {
+  case W65816CC::COND_SLT: SignedSelectOpc = W65816::Select16_SLT; break;
+  case W65816CC::COND_SGE: SignedSelectOpc = W65816::Select16_SGE; break;
+  case W65816CC::COND_SGT: SignedSelectOpc = W65816::Select16_SGT; break;
+  case W65816CC::COND_SLE: SignedSelectOpc = W65816::Select16_SLE; break;
+  default: break;
+  }
+
+  if (SignedSelectOpc) {
+    // For signed conditions, emit a pseudo that will be expanded later
+    // Don't create the diamond pattern here - let ExpandPseudo handle it
+    BuildMI(*MBB, MI, DL, TII.get(SignedSelectOpc), DstReg)
+        .addReg(TrueReg)
+        .addReg(FalseReg);
+    MI.eraseFromParent();
+    return MBB;
+  }
+
+  // For unsigned/equality conditions, create the diamond pattern here
   // Create the diamond pattern:
   //   MBB:
   //     cmp ...        (already done before Select16)
@@ -561,35 +590,7 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
                   std::next(MachineBasicBlock::iterator(MI)), MBB->end());
   SinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
 
-  // Get operands
-  Register DstReg = MI.getOperand(0).getReg();
-  Register TrueReg = MI.getOperand(1).getReg();
-  Register FalseReg = MI.getOperand(2).getReg();
-  W65816CC::CondCode CondCode = (W65816CC::CondCode)MI.getOperand(3).getImm();
-
-  // Handle signed conditions by emitting a signed select pseudo
-  // These pseudos are expanded later (in ExpandPseudo pass) to avoid
-  // the branch folder breaking the multi-instruction sequences
-  unsigned SignedSelectOpc = 0;
-  switch (CondCode) {
-  case W65816CC::COND_SLT: SignedSelectOpc = W65816::Select16_SLT; break;
-  case W65816CC::COND_SGE: SignedSelectOpc = W65816::Select16_SGE; break;
-  case W65816CC::COND_SGT: SignedSelectOpc = W65816::Select16_SGT; break;
-  case W65816CC::COND_SLE: SignedSelectOpc = W65816::Select16_SLE; break;
-  default: break;
-  }
-
-  if (SignedSelectOpc) {
-    // For signed conditions, emit a pseudo that will be expanded later
-    // Don't create the diamond pattern here - let ExpandPseudo handle it
-    BuildMI(*MBB, MI, DL, TII.get(SignedSelectOpc), DstReg)
-        .addReg(TrueReg)
-        .addReg(FalseReg);
-    MI.eraseFromParent();
-    return MBB;
-  }
-
-  // For unsigned/equality conditions, create the diamond pattern here
+  // For unsigned/equality conditions, use single branch
   // Add edges: MBB -> TrueMBB, MBB -> FalseMBB
   MBB->addSuccessor(TrueMBB);
   MBB->addSuccessor(FalseMBB);
