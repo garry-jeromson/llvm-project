@@ -153,6 +153,18 @@ The XCE instruction (0xFB) exchanges carry and emulation bits.
 - No support for dynamic M/X flag changes
 - 8-bit operations use sub-registers but mode switching not implemented
 
+### 8-bit (i8) Type Support
+**Working:**
+- i8 loads from absolute addresses (zextloadi8/sextloadi8 → LDA8_abs)
+- i8 stores to absolute addresses (truncstorei8 → STA8_abs)
+- i8 arithmetic (add, sub) - promotes to i16
+
+**Not Working:**
+- i8 loads through pointers (`load i8, ptr %p`) - requires indirect 8-bit load patterns
+- i8 stores through pointers (`store i8 %v, ptr %p`) - requires indirect 8-bit store patterns
+
+**Workaround:** Use i16 types instead of i8 where possible, or use absolute addresses for byte access.
+
 ### Addressing Modes
 **Working:**
 - Absolute addressing: `lda addr`, `sta addr`
