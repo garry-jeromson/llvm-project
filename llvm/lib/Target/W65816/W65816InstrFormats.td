@@ -71,6 +71,24 @@ class W65816Inst24<bits<8> opcode, dag outs, dag ins, string asmstr,
 }
 
 //===----------------------------------------------------------------------===//
+// 3-byte block move instructions (MVN/MVP)
+// Memory layout: [opcode][destbank][srcbank]
+// Note: Assembler syntax is "MVN srcbank,destbank" but object code is reversed
+//===----------------------------------------------------------------------===//
+class W65816InstBlockMove<bits<8> opcode, dag outs, dag ins, string asmstr,
+                          list<dag> pattern>
+    : W65816Inst<outs, ins, asmstr, pattern> {
+  field bits<24> Inst;
+  bits<8> srcbank;
+  bits<8> destbank;
+
+  let Inst{7-0} = opcode;
+  let Inst{15-8} = destbank;  // Object code order: dest first
+  let Inst{23-16} = srcbank;  // Then source
+  let Size = 3;
+}
+
+//===----------------------------------------------------------------------===//
 // 4-byte instructions (absolute long - 24-bit address)
 // Memory layout: [opcode][addr_lo][addr_mid][addr_hi]
 // Encoding: opcode in low bits (emitted first), addr in high bits (little-endian)

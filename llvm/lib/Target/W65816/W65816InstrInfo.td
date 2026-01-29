@@ -922,6 +922,23 @@ let isBarrier = 1, isBranch = 1, isTerminator = 1 in {
   // JML - Jump Long (24-bit)
   def JML : W65816Inst32<0x5C, (outs), (ins i32imm:$addr),
                          "jml\t$addr", []>;
+
+  // JMP - Jump Absolute Indirect
+  // Jump through pointer at specified address
+  def JMP_ind : W65816Inst24<0x6C, (outs), (ins addr16:$addr),
+                             "jmp\t($addr)", []>;
+
+  // JMP - Jump Absolute Indexed Indirect
+  // Jump through pointer at (address + X) - useful for jump tables
+  def JMP_indX : W65816Inst24<0x7C, (outs), (ins addr16:$addr),
+                              "jmp\t($addr,x)", []> {
+    let Uses = [X];
+  }
+
+  // JMP - Jump Absolute Indirect Long (24-bit)
+  // Jump through 24-bit pointer at specified address
+  def JMP_indL : W65816Inst24<0xDC, (outs), (ins addr16:$addr),
+                              "jmp\t[$addr]", []>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1053,10 +1070,14 @@ def PHK : W65816Inst8<0x4B, (outs), (ins), "phk", []> {
 // NOP - No Operation
 def NOP : W65816Inst8<0xEA, (outs), (ins), "nop", []>;
 
-// XCE - Exchange Carry and Emulation (65816 specific)
+// XCE - Exchange Carry and Emulation Bits (65816 specific)
+// This is the only way to switch between 6502 emulation mode and native mode
+// To enter native mode: CLC; XCE (clear carry, then exchange)
+// To enter emulation mode: SEC; XCE (set carry, then exchange)
 def XCE : W65816Inst8<0xFB, (outs), (ins), "xce", []> {
   let Defs = [P];
   let Uses = [P];
+  let hasSideEffects = 1;  // Changes processor mode
 }
 
 // WDM - Reserved for future expansion (treated as 2-byte NOP)
@@ -1295,6 +1316,31 @@ let Defs = [A, Y, P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
   def STAindirectIdx : Pseudo<(outs),
                               (ins GPR16:$val, i32imm:$stack_slot, GPR16:$ptr, GPR16:$idx),
                               "# STAindirectIdx $val, [$stack_slot], $ptr, $idx", []>;
+}
+
+//===----------------------------------------------------------------------===//
+// Block Move Instructions (MVN/MVP)
+// These copy blocks of memory between banks
+//===----------------------------------------------------------------------===//
+
+// Note: Block move operands are two bank bytes.
+// Assembler syntax: MVN srcbank,destbank
+// Object code order: opcode, destbank, srcbank (reversed!)
+// X = source address, Y = dest address, C = length-1
+// These instructions use and modify A (C), X, Y
+
+let Defs = [A, X, Y, P], Uses = [A, X, Y], hasSideEffects = 1 in {
+  // MVN - Block Move Negative (incrementing addresses)
+  // Use when destination is lower than source (or no overlap)
+  // Copies from X++ to Y++ until C becomes $FFFF
+  def MVN : W65816InstBlockMove<0x54, (outs), (ins imm8:$srcbank, imm8:$destbank),
+                                "mvn\t$srcbank,$destbank", []>;
+
+  // MVP - Block Move Positive (decrementing addresses)
+  // Use when destination is higher than source
+  // Copies from X-- to Y-- until C becomes $FFFF
+  def MVP : W65816InstBlockMove<0x44, (outs), (ins imm8:$srcbank, imm8:$destbank),
+                                "mvp\t$srcbank,$destbank", []>;
 }
 
 //===----------------------------------------------------------------------===//

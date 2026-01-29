@@ -97,6 +97,26 @@ or manual assembly. The compiler uses load-add-store sequences.
 STZ stores zero to memory without needing to load a register first. Useful for
 clearing memory locations efficiently.
 
+### Block Move Instructions (MVN/MVP)
+**Both instructions defined:**
+- `MVN srcbank,destbank` - Block Move Negative (incrementing addresses)
+- `MVP srcbank,destbank` - Block Move Positive (decrementing addresses)
+
+Usage: Load X with source address, Y with dest address, C (accumulator) with length-1.
+MVN copies from low to high addresses, MVP copies from high to low.
+Use MVN when dest < source, MVP when dest > source (for overlapping blocks).
+
+### JMP Indirect Modes
+**All indirect jump modes defined:**
+- `JMP ($addr)` - Jump Absolute Indirect (through 16-bit pointer)
+- `JMP ($addr,X)` - Jump Absolute Indexed Indirect (jump tables)
+- `JMP [$addr]` - Jump Absolute Indirect Long (through 24-bit pointer)
+
+### XCE - Exchange Carry and Emulation
+The XCE instruction (0xFB) exchanges carry and emulation bits.
+- To enter native mode: `CLC; XCE`
+- To enter emulation mode: `SEC; XCE`
+
 ### 8/16-bit Mode Switching
 - Currently assumes 16-bit mode throughout
 - No support for dynamic M/X flag changes
