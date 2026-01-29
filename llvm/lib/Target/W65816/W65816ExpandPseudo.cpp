@@ -99,6 +99,9 @@ private:
   bool expandSRA16rv(Block &MBB, BlockIt MBBI);
   bool expandSTAindexedX(Block &MBB, BlockIt MBBI);
   bool expandLDAindexedX(Block &MBB, BlockIt MBBI);
+  bool expandSTAindexedLongX(Block &MBB, BlockIt MBBI);
+  bool expandLDAindexedLongX(Block &MBB, BlockIt MBBI);
+  bool expandSTZindexedX(Block &MBB, BlockIt MBBI);
   bool expandLDAindirect(Block &MBB, BlockIt MBBI);
   bool expandLDAindirectIdx(Block &MBB, BlockIt MBBI);
   bool expandSTAindirect(Block &MBB, BlockIt MBBI);
@@ -198,6 +201,12 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandSTAindexedX(MBB, MBBI);
   case W65816::LDAindexedX:
     return expandLDAindexedX(MBB, MBBI);
+  case W65816::STAindexedLongX:
+    return expandSTAindexedLongX(MBB, MBBI);
+  case W65816::LDAindexedLongX:
+    return expandLDAindexedLongX(MBB, MBBI);
+  case W65816::STZindexedX:
+    return expandSTZindexedX(MBB, MBBI);
   case W65816::LDAindirect:
     return expandLDAindirect(MBB, MBBI);
   case W65816::LDAindirectIdx:
@@ -367,9 +376,35 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
 
 bool W65816ExpandPseudo::expandADD16ri(Block &MBB, BlockIt MBBI) {
   MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // ADD16ri $dst, $src, $imm
+  // Expand to: CLC; ADC #imm; (transfer to dst if needed)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+  int64_t Imm = MI.getOperand(2).getImm();
+
+  // First, ensure src is in A
+  if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  }
 
   // Clear carry before addition
   buildMI(MBB, MBBI, W65816::CLC);
+
+  // Add immediate to A
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_imm16), W65816::A)
+      .addImm(Imm);
+
+  // Move result to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -428,10 +463,35 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
 
 bool W65816ExpandPseudo::expandSUB16ri(Block &MBB, BlockIt MBBI) {
   MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
 
-  // SUB16ri needs SEC (set carry) then SBC with immediate
-  // For now, just set carry - immediate handling needs more work
+  // SUB16ri $dst, $src, $imm
+  // Expand to: SEC; SBC #imm; (transfer to dst if needed)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+  int64_t Imm = MI.getOperand(2).getImm();
+
+  // First, ensure src is in A
+  if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  }
+
+  // Set carry before subtraction (borrow = !carry)
   buildMI(MBB, MBBI, W65816::SEC);
+
+  // Subtract immediate from A
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_imm16), W65816::A)
+      .addImm(Imm);
+
+  // Move result to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -1358,6 +1418,141 @@ bool W65816ExpandPseudo::expandLDAindexedX(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAY);
   }
   // If DstReg == A, result is already there
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLDAindexedLongX(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LDAindexedLongX $dst, $addr, $idx
+  // Load from long $addr + $idx into $dst using 24-bit addressing
+  //
+  // Strategy:
+  // 1. Get idx to X
+  // 2. LDA_longX addr (24-bit load with X index)
+  // 3. Move result to dst if needed
+
+  Register DstReg = MI.getOperand(0).getReg();
+  MachineOperand &AddrOp = MI.getOperand(1);
+  Register IdxReg = MI.getOperand(2).getReg();
+
+  // Step 1: Get idx (byte offset) to X
+  if (IdxReg == W65816::A) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (IdxReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+    buildMI(MBB, MBBI, W65816::TAX);
+  }
+  // If IdxReg == X, it's already there
+
+  // Step 2: Load from addr,X using long (24-bit) addressing
+  if (AddrOp.isGlobal()) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_longX), W65816::A)
+        .addGlobalAddress(AddrOp.getGlobal(), AddrOp.getOffset());
+  } else {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_longX), W65816::A)
+        .add(AddrOp);
+  }
+
+  // Step 3: Move result to dst if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  }
+  // If DstReg == A, result is already there
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSTAindexedLongX(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // STAindexedLongX $val, $addr, $idx
+  // Store $val to long $addr + $idx using 24-bit addressing
+  //
+  // Strategy:
+  // 1. Get idx to X
+  // 2. Get val to A (may need to save X if idx was in X)
+  // 3. STA_longX addr
+
+  Register ValReg = MI.getOperand(0).getReg();
+  MachineOperand &AddrOp = MI.getOperand(1);
+  Register IdxReg = MI.getOperand(2).getReg();
+
+  // Handle val in X, idx in A case (need to swap)
+  if (ValReg == W65816::X && IdxReg == W65816::A) {
+    // Swap: A has idx, X has val
+    buildMI(MBB, MBBI, W65816::PHA);  // Save idx
+    buildMI(MBB, MBBI, W65816::TXA);  // Move val to A
+    buildMI(MBB, MBBI, W65816::PLX);  // Restore idx to X
+  } else {
+    // Get idx to X first
+    if (IdxReg == W65816::A) {
+      buildMI(MBB, MBBI, W65816::TAX);
+    } else if (IdxReg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TYA);
+      buildMI(MBB, MBBI, W65816::TAX);
+    }
+    // Get val to A
+    if (ValReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+    } else if (ValReg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TYA);
+    }
+  }
+
+  // Store using long (24-bit) addressing with X index
+  if (AddrOp.isGlobal()) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_longX))
+        .addReg(W65816::A)
+        .addGlobalAddress(AddrOp.getGlobal(), AddrOp.getOffset());
+  } else {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_longX))
+        .addReg(W65816::A)
+        .add(AddrOp);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSTZindexedX(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // STZindexedX $addr, $idx
+  // Store zero to $addr + $idx using indexed addressing
+  //
+  // Strategy:
+  // 1. Get idx (byte offset) to X
+  // 2. STZ_absX addr
+
+  MachineOperand &AddrOp = MI.getOperand(0);
+  Register IdxReg = MI.getOperand(1).getReg();
+
+  // Step 1: Get idx (byte offset) to X
+  if (IdxReg == W65816::A) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (IdxReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+    buildMI(MBB, MBBI, W65816::TAX);
+  }
+  // If IdxReg == X, it's already there
+
+  // Step 2: Store zero using indexed addressing
+  if (AddrOp.isGlobal()) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STZ_absX))
+        .addGlobalAddress(AddrOp.getGlobal(), AddrOp.getOffset());
+  } else {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STZ_absX))
+        .add(AddrOp);
+  }
 
   MI.eraseFromParent();
   return true;

@@ -49,3 +49,25 @@ define i16 @dec_reg(i16 %a) {
   %r = add i16 %a, -1
   ret i16 %r
 }
+
+;===----------------------------------------------------------------------===
+; Immediate arithmetic (larger than +/-1)
+;===----------------------------------------------------------------------===
+
+; CHECK-LABEL: add_imm:
+; CHECK: clc
+; CHECK: adc #100
+; CHECK: rts
+define i16 @add_imm(i16 %a) {
+  %r = add i16 %a, 100
+  ret i16 %r
+}
+
+; CHECK-LABEL: add_imm_large:
+; CHECK: clc
+; CHECK: adc #1000
+; CHECK: rts
+define i16 @add_imm_large(i16 %a) {
+  %r = add i16 %a, 1000
+  ret i16 %r
+}

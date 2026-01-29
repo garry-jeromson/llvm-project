@@ -55,6 +55,10 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   // Set scheduling preference
   setSchedulingPreference(Sched::RegPressure);
 
+  // Boolean values (i1) are represented as 0 or 1 in an i16 register
+  setBooleanContents(ZeroOrOneBooleanContent);
+  setBooleanVectorContents(ZeroOrOneBooleanContent);
+
   // W65816 has limited support for certain operations
   // We need to expand or custom lower many of them
 
@@ -109,8 +113,8 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::CTTZ, MVT::i16, Expand);
   setOperationAction(ISD::CTPOP, MVT::i16, Expand);
 
-  // Byte swap - expand
-  setOperationAction(ISD::BSWAP, MVT::i16, Expand);
+  // Byte swap - use XBA instruction
+  setOperationAction(ISD::BSWAP, MVT::i16, Legal);
 
   // Note: We don't use Custom for LOAD/STORE because returning SDValue()
   // for cases we don't handle doesn't work properly. Instead, we rely on

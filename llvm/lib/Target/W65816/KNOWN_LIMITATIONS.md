@@ -15,6 +15,7 @@ This document tracks known limitations and areas for future improvement.
 
 ### Pseudo Instruction Expansion
 - **ADD16rr/SUB16rr**: Uses stack-relative addressing which adds overhead (push, operate, pull)
+- **ADD16ri/SUB16ri**: Immediate variants work correctly - `CLC; ADC #imm` / `SEC; SBC #imm`
 - **Stack cleanup**: Some sequences (like ADD A to A) have suboptimal stack handling
 
 ## Phase 3: Control Flow
@@ -88,14 +89,20 @@ Note: Memory increment/decrement instructions are defined but require intrinsics
 or manual assembly. The compiler uses load-add-store sequences.
 
 ### STZ - Store Zero to Memory
-**All modes defined:**
-- Absolute: `STZ $addr`
-- Direct page: `STZ $dp`
-- Absolute indexed X: `STZ $addr,x`
-- DP indexed X: `STZ $dp,x`
+**All modes defined with selection patterns:**
+- Absolute: `STZ $addr` - **has selection pattern** for `store i16 0, ptr @global`
+- Direct page: `STZ $dp` - **has selection pattern** for `.zeropage` globals
+- Absolute indexed X: `STZ $addr,x` - **has selection pattern** for indexed zero stores
+- DP indexed X: `STZ $dp,x` - **has selection pattern** (uses absolute variant)
 
 STZ stores zero to memory without needing to load a register first. Useful for
 clearing memory locations efficiently.
+
+### XBA - Exchange B and A (Byte Swap)
+**Selection pattern implemented:**
+- `XBA` instruction maps to `llvm.bswap.i16` intrinsic
+- Swaps high and low bytes of 16-bit accumulator in single instruction
+- Example: `call i16 @llvm.bswap.i16(i16 %val)` → `xba`
 
 ### Block Move Instructions (MVN/MVP)
 **Both instructions defined:**
@@ -117,6 +124,30 @@ The XCE instruction (0xFB) exchanges carry and emulation bits.
 - To enter native mode: `CLC; XCE`
 - To enter emulation mode: `SEC; XCE`
 
+### 65816-Specific Instructions (All Defined)
+**Inter-register transfers:**
+- `TXY` - Transfer X to Y
+- `TYX` - Transfer Y to X
+
+**16-bit register transfers:**
+- `TCD` - Transfer Accumulator to Direct Page register
+- `TDC` - Transfer Direct Page register to Accumulator
+- `TCS` - Transfer Accumulator to Stack Pointer
+- `TSC` - Transfer Stack Pointer to Accumulator
+
+**Stack push effective address:**
+- `PEA $addr` - Push Effective Absolute Address
+- `PEI ($dp)` - Push Effective Indirect Address
+- `PER label` - Push Effective PC Relative Address
+
+**Test and modify bits:**
+- `TSB $dp`, `TSB $addr` - Test and Set Bits (Memory |= A)
+- `TRB $dp`, `TRB $addr` - Test and Reset Bits (Memory &= ~A)
+
+**Software interrupts:**
+- `BRK #sig` - Software Break
+- `COP #sig` - Co-processor Enable
+
 ### 8/16-bit Mode Switching
 - Currently assumes 16-bit mode throughout
 - No support for dynamic M/X flag changes
@@ -131,10 +162,27 @@ The XCE instruction (0xFB) exchanges carry and emulation bits.
 - Indexed absolute Y: `lda addr,y`, `sta addr,y` (selected when index is in Y)
 - Direct page addressing: `lda dp`, `sta dp` (for globals in `.zeropage` section)
 - Indexed direct page X: `lda dp,x`, `sta dp,x` (for zero page arrays with X index)
+- **Long (24-bit) addressing**: `lda $123456`, `sta $123456` (for globals in `.fardata`, `.rodata`, `.romdata` sections)
+
+**Long Addressing Details:**
+Globals in the following sections automatically use 24-bit (4-byte) long addressing:
+- `.fardata` - far data in other banks
+- `.rodata` - read-only data (ROM)
+- `.romdata` - explicit ROM data
+- `.bank*` - any section starting with `.bank`
+
+This enables cross-bank access for SNES development where ROM data is in banks $00-$7F.
+
+**Long indexed (implemented):**
+- `lda $123456,x` - **has selection pattern** for far global arrays with variable index
+- `sta $123456,x` - **has selection pattern** for far global arrays with variable index
+
+**Defined but no selection patterns:**
+- DP indirect long: `lda [$dp]` (LDA_dpIndLong defined)
+- DP indirect long indexed: `lda [$dp],y` (LDA_dpIndLongY defined)
 
 **Not Yet Implemented:**
 - Indirect addressing ((dp) / (dp,X) / (dp),Y)
-- Long addressing (24-bit, cross-bank)
 - Stack-relative indirect ((offset,S),Y)
 
 **Note:** W65816 has no `lda dp,y` or `sta dp,y` instructions - only X-indexed direct page exists.
@@ -205,8 +253,9 @@ pla           ; deallocate 4 bytes
 
 ## Test Cases That Fail
 
+### Loops with Conditional Branches (i1 type legalization)
 ```llvm
-; Fails: register spilling needed
+; Fails: i1 type from icmp not properly legalized
 define i16 @count_down(i16 %n) {
 entry:
   br label %loop
@@ -214,11 +263,22 @@ loop:
   %val = phi i16 [ %n, %entry ], [ %dec, %loop ]
   %dec = add i16 %val, -1
   %done = icmp eq i16 %dec, 0
-  br i1 %done, label %exit, label %loop
+  br i1 %done, label %exit, label %loop  ; <-- crashes here
 exit:
   ret i16 %val
 }
 ```
+
+The issue is that `icmp` produces an i1 (boolean) result, and `br i1` tries to branch
+on this i1 value. The backend doesn't properly legalize i1 types. The crash occurs
+during DAG legalization with "Unexpected illegal type!".
+
+**Workaround:** Currently, only comparisons used directly in `br_cc` (combined
+comparison+branch) patterns work. Loops with explicit `icmp` followed by `br i1`
+will crash. This affects:
+- Simple loops with conditions
+- Select statements (`select i1 %cmp, ...`)
+- Any pattern where i1 is stored or manipulated
 
 ## Completed Phases
 

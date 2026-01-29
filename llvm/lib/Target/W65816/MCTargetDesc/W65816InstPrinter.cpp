@@ -76,3 +76,18 @@ void W65816InstPrinter::printAddrModeMemSrc(const MCInst *MI, unsigned OpNo,
     OS << "<unknown>";
   }
 }
+
+void W65816InstPrinter::printLongAddr(const MCInst *MI, unsigned OpNo,
+                                      raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+
+  if (Op.isImm()) {
+    // Print 24-bit address as $BBAAAA (bank:address)
+    uint32_t Addr = Op.getImm() & 0xFFFFFF;
+    OS << "$" << format_hex_no_prefix(Addr, 6);
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  } else {
+    OS << "<unknown>";
+  }
+}

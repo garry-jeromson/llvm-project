@@ -37,6 +37,7 @@ public:
 private:
   void printOperand(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
   void printAddrModeMemSrc(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
+  void printLongAddr(const MCInst *MI, unsigned OpNo, raw_ostream &OS);
 };
 
 } // namespace llvm

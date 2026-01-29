@@ -52,6 +52,24 @@ static bool isDirectPageGlobal(const GlobalValue *GV) {
          Section == ".zp" || Section == "zeropage" || Section == "directpage";
 }
 
+/// Check if a global variable requires long (24-bit) addressing.
+/// Globals in sections like ".fardata", ".rodata", or ".romdata" are assumed
+/// to be in a different bank and require 4-byte long addressing instructions.
+/// This is common for SNES development where ROM data is in banks $00-$7F.
+static bool isFarGlobal(const GlobalValue *GV) {
+  if (!GV)
+    return false;
+
+  StringRef Section = GV->getSection();
+  if (Section.empty())
+    return false;
+
+  // Check for common far/ROM section names
+  return Section == ".fardata" || Section == ".far" ||
+         Section == ".romdata" || Section == ".rodata" ||
+         Section.starts_with(".bank");
+}
+
 class W65816DAGToDAGISel : public SelectionDAGISel {
 public:
   W65816DAGToDAGISel() = delete;
@@ -202,6 +220,38 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
 
     // Only handle simple stores of i16
     if (ST->getMemoryVT() == MVT::i16 && !ST->isTruncatingStore()) {
+      // Check for store of constant zero - use STZ instruction
+      if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Value)) {
+        if (CN->isZero()) {
+          // Store zero to absolute address
+          if (Addr.getOpcode() == W65816ISD::WRAPPER) {
+            SDValue Inner = Addr.getOperand(0);
+            if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+              if (isDirectPageGlobal(GA->getGlobal())) {
+                // Use direct page STZ (2-byte instruction)
+                SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                    GA->getGlobal(), DL, MVT::i8, GA->getOffset());
+                SDValue Ops[] = {TargetAddr, Chain};
+                MachineSDNode *Store =
+                    CurDAG->getMachineNode(W65816::STZ_dp, DL, MVT::Other, Ops);
+                CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+                ReplaceNode(N, Store);
+                return;
+              }
+              // Use absolute STZ (3-byte instruction)
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i16, GA->getOffset());
+              SDValue Ops[] = {TargetAddr, Chain};
+              MachineSDNode *Store =
+                  CurDAG->getMachineNode(W65816::STZ_abs, DL, MVT::Other, Ops);
+              CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+              ReplaceNode(N, Store);
+              return;
+            }
+          }
+        }
+      }
+
       // TODO: Memory shift optimization (ASL/LSR $addr instead of load-shift-store)
       // Disabled for now - needs more work on chain handling.
       // The memory shift instructions are defined and can be used via intrinsics.
@@ -221,8 +271,7 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         return;
       }
 
-      // Check for direct page addressing: (store val, (wrapper GA))
-      // where GA is in a zero page section
+      // Check for direct page or far addressing: (store val, (wrapper GA))
       if (Addr.getOpcode() == W65816ISD::WRAPPER) {
         SDValue Inner = Addr.getOperand(0);
         if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
@@ -235,6 +284,19 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
             SDValue Ops[] = {Value, TargetAddr, Chain};
             MachineSDNode *Store =
                 CurDAG->getMachineNode(W65816::STA_dp, DL, MVT::Other, Ops);
+
+            CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+            ReplaceNode(N, Store);
+            return;
+          }
+          if (isFarGlobal(GA->getGlobal())) {
+            // Use long (24-bit) addressing for far globals
+            SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                GA->getGlobal(), DL, MVT::i32, GA->getOffset());
+
+            SDValue Ops[] = {Value, TargetAddr, Chain};
+            MachineSDNode *Store =
+                CurDAG->getMachineNode(W65816::STA_long, DL, MVT::Other, Ops);
 
             CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
             ReplaceNode(N, Store);
@@ -260,19 +322,63 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
 
         if (Base.getNode() && Index.getNode()) {
-          // We have a (wrapper GA) + index pattern
-          // Use STAindexedX pseudo instruction which handles register
-          // allocation conflicts properly. The pseudo is expanded after
-          // register allocation when we know the physical registers.
           if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Base)) {
-            // For now, always use absolute indexed (not direct page)
-            // Direct page indexed would need a separate pseudo
+            // Check if index is a constant - can fold into address
+            if (ConstantSDNode *CI = dyn_cast<ConstantSDNode>(Index)) {
+              int64_t Offset = GA->getOffset() + CI->getSExtValue();
+
+              if (isFarGlobal(GA->getGlobal())) {
+                // Use long addressing with folded offset
+                SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                    GA->getGlobal(), DL, MVT::i32, Offset);
+                SDValue Ops[] = {Value, TargetAddr, Chain};
+                MachineSDNode *Store =
+                    CurDAG->getMachineNode(W65816::STA_long, DL, MVT::Other, Ops);
+                CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+                ReplaceNode(N, Store);
+                return;
+              }
+              // Regular absolute with folded offset
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i16, Offset);
+              SDValue Ops[] = {Value, TargetAddr, Chain};
+              MachineSDNode *Store =
+                  CurDAG->getMachineNode(W65816::STA_abs, DL, MVT::Other, Ops);
+              CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+              ReplaceNode(N, Store);
+              return;
+            }
+
+            // Variable index - use indexed addressing
+            if (isFarGlobal(GA->getGlobal())) {
+              // Use long indexed for far globals
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i32, GA->getOffset());
+              SDValue Ops[] = {Value, TargetAddr, Index, Chain};
+              MachineSDNode *Store =
+                  CurDAG->getMachineNode(W65816::STAindexedLongX, DL, MVT::Other, Ops);
+              CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+              ReplaceNode(N, Store);
+              return;
+            }
+
+            // Regular absolute indexed
             SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
                 GA->getGlobal(), DL, MVT::i16, GA->getOffset());
 
+            // Check if storing zero - use STZ instead of STA
+            if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Value)) {
+              if (CN->isZero()) {
+                SDValue Ops[] = {TargetAddr, Index, Chain};
+                MachineSDNode *Store =
+                    CurDAG->getMachineNode(W65816::STZindexedX, DL, MVT::Other, Ops);
+                CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+                ReplaceNode(N, Store);
+                return;
+              }
+            }
+
             // Emit STAindexedX pseudo: (val, addr, idx)
-            // This pseudo will be expanded after register allocation
-            // to properly handle register conflicts
             SDValue Ops[] = {Value, TargetAddr, Index, Chain};
             MachineSDNode *Store =
                 CurDAG->getMachineNode(W65816::STAindexedX, DL, MVT::Other, Ops);
@@ -367,8 +473,7 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         return;
       }
 
-      // Check for direct page addressing: (load (wrapper GA))
-      // where GA is in a zero page section
+      // Check for direct page or far addressing: (load (wrapper GA))
       if (Addr.getOpcode() == W65816ISD::WRAPPER) {
         SDValue Inner = Addr.getOperand(0);
         if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
@@ -381,6 +486,21 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
             SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
             MachineSDNode *Load =
                 CurDAG->getMachineNode(W65816::LDA_dp, DL, VTs, Ops);
+
+            CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+            ReplaceNode(N, Load);
+            return;
+          }
+          if (isFarGlobal(GA->getGlobal())) {
+            // Use long (24-bit) addressing for far globals
+            // The 24-bit address is constructed from the global address
+            SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                GA->getGlobal(), DL, MVT::i32, GA->getOffset());
+
+            SDValue Ops[] = {TargetAddr, Chain};
+            SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+            MachineSDNode *Load =
+                CurDAG->getMachineNode(W65816::LDA_long, DL, VTs, Ops);
 
             CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
             ReplaceNode(N, Load);
@@ -406,13 +526,50 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
 
         if (Base.getNode() && Index.getNode()) {
-          // We have a (wrapper GA) + index pattern
-          // Use LDAindexedX pseudo instruction which handles register
-          // allocation properly. The pseudo is expanded after register
-          // allocation when we know the physical registers.
           if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Base)) {
-            // For now, always use absolute indexed (not direct page)
-            // Direct page indexed would need a separate pseudo
+            // Check if index is a constant - can fold into address
+            if (ConstantSDNode *CI = dyn_cast<ConstantSDNode>(Index)) {
+              int64_t Offset = GA->getOffset() + CI->getSExtValue();
+
+              if (isFarGlobal(GA->getGlobal())) {
+                // Use long addressing with folded offset
+                SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                    GA->getGlobal(), DL, MVT::i32, Offset);
+                SDValue Ops[] = {TargetAddr, Chain};
+                SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+                MachineSDNode *Load =
+                    CurDAG->getMachineNode(W65816::LDA_long, DL, VTs, Ops);
+                CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+                ReplaceNode(N, Load);
+                return;
+              }
+              // Regular absolute with folded offset
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i16, Offset);
+              SDValue Ops[] = {TargetAddr, Chain};
+              SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+              MachineSDNode *Load =
+                  CurDAG->getMachineNode(W65816::LDA_abs, DL, VTs, Ops);
+              CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+              ReplaceNode(N, Load);
+              return;
+            }
+
+            // Variable index - use indexed addressing
+            if (isFarGlobal(GA->getGlobal())) {
+              // Use long indexed for far globals
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i32, GA->getOffset());
+              SDValue Ops[] = {TargetAddr, Index, Chain};
+              SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+              MachineSDNode *Load =
+                  CurDAG->getMachineNode(W65816::LDAindexedLongX, DL, VTs, Ops);
+              CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+              ReplaceNode(N, Load);
+              return;
+            }
+
+            // Regular absolute indexed
             SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
                 GA->getGlobal(), DL, MVT::i16, GA->getOffset());
 

@@ -22,6 +22,12 @@ def imm8 : Operand<i8>;
 // 16-bit immediate operand
 def imm16 : Operand<i16>;
 
+// 24-bit long address operand (stored in i32, high 8 bits ignored)
+// Used for absolute long addressing to access any bank
+def addr24 : Operand<i32> {
+  let PrintMethod = "printLongAddr";
+}
+
 // 16-bit absolute address operand
 def addr16 : Operand<i16> {
   let PrintMethod = "printAddrModeMemSrc";
@@ -263,6 +269,82 @@ let Defs = [P] in {
 // STA (offset,S),Y - Store to (address at SP+offset) + Y
 def STA_srIndY : W65816Inst16<0x93, (outs), (ins ACC16:$src, imm8:$imm),
                               "sta\t($imm,s),y", []> {
+  let Uses = [Y];
+  let mayStore = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Long (24-bit) Addressing Instructions
+// These instructions access the full 24-bit address space (16MB)
+// Used for cross-bank memory access on SNES and similar systems
+//===----------------------------------------------------------------------===//
+
+let Defs = [P] in {
+  // LDA absolute long - Load from 24-bit address
+  // Opcode: 0xAF, 4 bytes: [AF][addr_lo][addr_mid][addr_hi]
+  def LDA_long : W65816Inst32<0xAF, (outs ACC16:$dst), (ins addr24:$addr),
+                              "lda\t$addr", []> {
+    let mayLoad = 1;
+  }
+
+  // LDA absolute long,X - Load from 24-bit address + X
+  // Opcode: 0xBF, 4 bytes
+  def LDA_longX : W65816Inst32<0xBF, (outs ACC16:$dst), (ins addr24:$addr),
+                               "lda\t$addr,x", []> {
+    let Uses = [X];
+    let mayLoad = 1;
+  }
+}
+
+// STA absolute long - Store to 24-bit address
+// Opcode: 0x8F, 4 bytes
+def STA_long : W65816Inst32<0x8F, (outs), (ins ACC16:$src, addr24:$addr),
+                            "sta\t$addr", []> {
+  let mayStore = 1;
+}
+
+// STA absolute long,X - Store to 24-bit address + X
+// Opcode: 0x9F, 4 bytes
+def STA_longX : W65816Inst32<0x9F, (outs), (ins ACC16:$src, addr24:$addr),
+                             "sta\t$addr,x", []> {
+  let Uses = [X];
+  let mayStore = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Direct Page Indirect Long Addressing
+// The DP location contains a 24-bit pointer (3 bytes)
+// Syntax uses square brackets: LDA [$dp] instead of LDA ($dp)
+//===----------------------------------------------------------------------===//
+
+let Defs = [P] in {
+  // LDA [$dp] - Load through 24-bit pointer at direct page location
+  // Opcode: 0xA7, 2 bytes: [A7][dp_offset]
+  def LDA_dpIndLong : W65816Inst16<0xA7, (outs ACC16:$dst), (ins addr8dp:$imm),
+                                   "lda\t[$imm]", []> {
+    let mayLoad = 1;
+  }
+
+  // LDA [$dp],Y - Load through 24-bit pointer + Y offset
+  // Opcode: 0xB7, 2 bytes
+  def LDA_dpIndLongY : W65816Inst16<0xB7, (outs ACC16:$dst), (ins addr8dp:$imm),
+                                    "lda\t[$imm],y", []> {
+    let Uses = [Y];
+    let mayLoad = 1;
+  }
+}
+
+// STA [$dp] - Store through 24-bit pointer at direct page location
+// Opcode: 0x87, 2 bytes
+def STA_dpIndLong : W65816Inst16<0x87, (outs), (ins ACC16:$src, addr8dp:$imm),
+                                 "sta\t[$imm]", []> {
+  let mayStore = 1;
+}
+
+// STA [$dp],Y - Store through 24-bit pointer + Y offset
+// Opcode: 0x97, 2 bytes
+def STA_dpIndLongY : W65816Inst16<0x97, (outs), (ins ACC16:$src, addr8dp:$imm),
+                                  "sta\t[$imm],y", []> {
   let Uses = [Y];
   let mayStore = 1;
 }
@@ -1090,6 +1172,108 @@ def STP : W65816Inst8<0xDB, (outs), (ins), "stp", []>;
 def WAI : W65816Inst8<0xCB, (outs), (ins), "wai", []>;
 
 //===----------------------------------------------------------------------===//
+// Inter-register Transfers (65816 only)
+//===----------------------------------------------------------------------===//
+
+// TXY - Transfer X to Y
+let Defs = [Y, P], Uses = [X], hasSideEffects = 0 in
+def TXY : W65816Inst8<0x9B, (outs), (ins), "txy", []>;
+
+// TYX - Transfer Y to X
+let Defs = [X, P], Uses = [Y], hasSideEffects = 0 in
+def TYX : W65816Inst8<0xBB, (outs), (ins), "tyx", []>;
+
+//===----------------------------------------------------------------------===//
+// 16-bit Register Transfers (65816 only)
+//===----------------------------------------------------------------------===//
+
+// TCD - Transfer 16-bit Accumulator to Direct Page Register
+let Defs = [D, P], Uses = [A], hasSideEffects = 0 in
+def TCD : W65816Inst8<0x5B, (outs), (ins), "tcd", []>;
+
+// TDC - Transfer Direct Page Register to 16-bit Accumulator
+let Defs = [A, P], Uses = [D], hasSideEffects = 0 in
+def TDC : W65816Inst8<0x7B, (outs), (ins), "tdc", []>;
+
+// TCS - Transfer 16-bit Accumulator to Stack Pointer
+let Defs = [SP], Uses = [A], hasSideEffects = 0 in
+def TCS : W65816Inst8<0x1B, (outs), (ins), "tcs", []>;
+
+// TSC - Transfer Stack Pointer to 16-bit Accumulator
+let Defs = [A, P], Uses = [SP], hasSideEffects = 0 in
+def TSC : W65816Inst8<0x3B, (outs), (ins), "tsc", []>;
+
+//===----------------------------------------------------------------------===//
+// Byte Manipulation (65816 only)
+//===----------------------------------------------------------------------===//
+
+// XBA - Exchange B and A (swap high and low bytes of 16-bit accumulator)
+// Maps directly to llvm.bswap.i16 intrinsic
+let Defs = [P], hasSideEffects = 0 in
+def XBA : W65816Inst8<0xEB, (outs ACC16:$dst), (ins ACC16:$src),
+                      "xba", [(set ACC16:$dst, (bswap ACC16:$src))]> {
+  let Constraints = "$src = $dst";
+}
+
+//===----------------------------------------------------------------------===//
+// Stack Push Effective Address (65816 only)
+//===----------------------------------------------------------------------===//
+
+// PEA - Push Effective Absolute Address
+// Pushes the 16-bit operand value onto the stack
+let Defs = [SP], Uses = [SP], mayStore = 1 in
+def PEA : W65816Inst24<0xF4, (outs), (ins addr16:$addr),
+                       "pea\t$addr", []>;
+
+// PEI - Push Effective Indirect Address
+// Pushes 16-bit value from direct page location onto stack
+let Defs = [SP], Uses = [SP], mayLoad = 1, mayStore = 1 in
+def PEI : W65816Inst16<0xD4, (outs), (ins imm8:$imm),
+                       "pei\t($imm)", []>;
+
+// PER - Push Effective PC Relative Address
+// Pushes PC + signed 16-bit offset onto stack
+let Defs = [SP], Uses = [SP], mayStore = 1 in
+def PER : W65816Inst24<0x62, (outs), (ins brtarget16:$addr),
+                       "per\t$addr", []>;
+
+//===----------------------------------------------------------------------===//
+// Test and Modify Bits (65816 only)
+//===----------------------------------------------------------------------===//
+
+// TSB - Test and Set Bits (Memory |= A, sets Z based on original AND)
+let Defs = [P], Uses = [A], mayLoad = 1, mayStore = 1 in {
+  def TSB_dp  : W65816Inst16<0x04, (outs), (ins imm8:$imm),
+                             "tsb\t$imm", []>;
+  def TSB_abs : W65816Inst24<0x0C, (outs), (ins addr16:$addr),
+                             "tsb\t$addr", []>;
+}
+
+// TRB - Test and Reset Bits (Memory &= ~A, sets Z based on original AND)
+let Defs = [P], Uses = [A], mayLoad = 1, mayStore = 1 in {
+  def TRB_dp  : W65816Inst16<0x14, (outs), (ins imm8:$imm),
+                             "trb\t$imm", []>;
+  def TRB_abs : W65816Inst24<0x1C, (outs), (ins addr16:$addr),
+                             "trb\t$addr", []>;
+}
+
+//===----------------------------------------------------------------------===//
+// Software Interrupts
+//===----------------------------------------------------------------------===//
+
+// BRK - Software Break
+// Takes a signature byte (often used as a system call number)
+let isCall = 1, hasSideEffects = 1 in
+def BRK : W65816Inst16<0x00, (outs), (ins imm8:$imm),
+                       "brk\t#$imm", []>;
+
+// COP - Co-processor Enable (software interrupt)
+// Takes a signature byte for co-processor selection
+let isCall = 1, hasSideEffects = 1 in
+def COP : W65816Inst16<0x02, (outs), (ins imm8:$imm),
+                       "cop\t#$imm", []>;
+
+//===----------------------------------------------------------------------===//
 // Pseudo Instructions for Code Generation
 //===----------------------------------------------------------------------===//
 
@@ -1271,11 +1455,29 @@ let Defs = [A, X, P], mayLoad = 1, hasSideEffects = 0 in {
                            "# LDAindexedX $dst, $addr, $idx", []>;
 }
 
+// Long (24-bit) indexed load - for far arrays with variable index
+let Defs = [A, X, P], mayLoad = 1, hasSideEffects = 0 in {
+  def LDAindexedLongX : Pseudo<(outs GPR16:$dst), (ins addr24:$addr, GPR16:$idx),
+                               "# LDAindexedLongX $dst, $addr, $idx", []>;
+}
+
 // These handle indexed stores with proper register allocation
 // The expansion handles saving/restoring registers as needed
 let Defs = [A, X, P], mayStore = 1, hasSideEffects = 0 in {
   def STAindexedX : Pseudo<(outs), (ins GPR16:$val, addr16:$addr, GPR16:$idx),
                            "# STAindexedX $val, $addr, $idx", []>;
+}
+
+// Long (24-bit) indexed store - for far arrays with variable index
+let Defs = [A, X, P], mayStore = 1, hasSideEffects = 0 in {
+  def STAindexedLongX : Pseudo<(outs), (ins GPR16:$val, addr24:$addr, GPR16:$idx),
+                               "# STAindexedLongX $val, $addr, $idx", []>;
+}
+
+// STZ indexed - store zero to array element (optimization for store 0)
+let Defs = [X, P], mayStore = 1, hasSideEffects = 0 in {
+  def STZindexedX : Pseudo<(outs), (ins addr16:$addr, GPR16:$idx),
+                           "# STZindexedX $addr, $idx", []>;
 }
 
 //===----------------------------------------------------------------------===//

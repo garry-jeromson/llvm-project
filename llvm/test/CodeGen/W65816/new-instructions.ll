@@ -81,17 +81,35 @@ define i16 @test_xor_imm(i16 %a) {
 }
 
 ;===----------------------------------------------------------------------===
-; Note: The following instructions are defined but don't have automatic
-; selection patterns. They require an assembly parser for inline asm testing:
-;
-; BIT - Test memory bits (immediate, absolute, dp, indexed modes)
-; STZ - Store zero to memory (absolute, dp, indexed modes)
-; INC/DEC memory modes (absolute, dp, indexed)
-; MVN/MVP - Block move instructions
-; JMP indirect modes (absolute indirect, indexed indirect, indirect long)
-;
-; These instructions can be used via:
+; Note: The following instructions are now defined (as of Jan 2025) but
+; don't have automatic selection patterns yet. They can be used via:
 ; 1. Direct assembly output (when assembler is available)
 ; 2. Future intrinsics
 ; 3. Custom selection patterns (TODO)
+;
+; FULLY IMPLEMENTED (all addressing modes):
+; - BIT: immediate, absolute, DP, abs+X, DP+X
+; - STZ: absolute, DP, abs+X, DP+X
+; - INC/DEC memory: absolute, DP, abs+X, DP+X
+; - ASL/LSR/ROL/ROR memory: DP, DP+X, abs, abs+X
+; - MVN/MVP: block move instructions
+; - JMP indirect: (abs), (abs,X), [abs] (indirect long)
+;
+; LONG (24-BIT) ADDRESSING - Partial selection patterns:
+; - LDA_long/STA_long: for globals in .fardata, .rodata, .romdata sections
+; - LDA_longX/STA_longX: defined, no selection patterns yet
+; - LDA_dpIndLong/STA_dpIndLong: DP indirect long (3-byte pointer)
+; - LDA_dpIndLongY/STA_dpIndLongY: DP indirect long + Y
+; - JML/JSL/RTL: already existed for long jumps/calls
+;
+; 65816-SPECIFIC INSTRUCTIONS:
+; - TXY/TYX: inter-register transfers
+; - TCD/TDC/TCS/TSC: 16-bit register transfers
+; - XBA: exchange B and A bytes (has bswap pattern!)
+; - XCE: exchange Carry/Emulation flags
+; - PEA/PEI/PER: push effective address
+; - TSB/TRB: test and set/reset bits
+; - BRK/COP: software interrupts
+; - BRL: branch long (16-bit offset)
+; - WAI/STP: wait/stop processor
 ;===----------------------------------------------------------------------===
