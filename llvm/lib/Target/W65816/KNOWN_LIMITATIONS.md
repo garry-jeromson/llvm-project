@@ -87,6 +87,16 @@ accumulator. It's typically used before conditional branches.
 Note: Memory increment/decrement instructions are defined but require intrinsics
 or manual assembly. The compiler uses load-add-store sequences.
 
+### STZ - Store Zero to Memory
+**All modes defined:**
+- Absolute: `STZ $addr`
+- Direct page: `STZ $dp`
+- Absolute indexed X: `STZ $addr,x`
+- DP indexed X: `STZ $dp,x`
+
+STZ stores zero to memory without needing to load a register first. Useful for
+clearing memory locations efficiently.
+
 ### 8/16-bit Mode Switching
 - Currently assumes 16-bit mode throughout
 - No support for dynamic M/X flag changes

@@ -302,6 +302,33 @@ def STY_abs : W65816Inst24<0x8C, (outs), (ins IDX16:$src, addr16:$addr),
                            []>;
 
 //===----------------------------------------------------------------------===//
+// STZ - Store Zero to Memory
+// Stores zero without needing to load a register first
+//===----------------------------------------------------------------------===//
+
+let mayStore = 1, hasSideEffects = 0 in {
+  // STZ absolute
+  def STZ_abs : W65816Inst24<0x9C, (outs), (ins addr16:$addr),
+                             "stz\t$addr", []>;
+
+  // STZ direct page
+  def STZ_dp : W65816Inst16<0x64, (outs), (ins addr8dp:$imm),
+                            "stz\t$imm", []>;
+
+  // STZ absolute,X
+  def STZ_absX : W65816Inst24<0x9E, (outs), (ins addr16:$addr),
+                              "stz\t$addr,x", []> {
+    let Uses = [X];
+  }
+
+  // STZ direct page,X
+  def STZ_dpX : W65816Inst16<0x74, (outs), (ins addr8dp:$imm),
+                             "stz\t$imm,x", []> {
+    let Uses = [X];
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Arithmetic Instructions
 //===----------------------------------------------------------------------===//
 
