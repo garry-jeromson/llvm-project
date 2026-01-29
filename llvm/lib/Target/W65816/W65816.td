@@ -26,6 +26,16 @@ def FeatureSNES
     : SubtargetFeature<"snes", "IsSNES", "true",
                        "Target is Super Nintendo Entertainment System">;
 
+// 8-bit mode features (M and X flags in status register)
+// These allow compile-time selection of accumulator and index register width
+def FeatureAcc8Bit
+    : SubtargetFeature<"acc8bit", "UseAcc8Bit", "true",
+                       "Use 8-bit accumulator (M=1)">;
+
+def FeatureIdx8Bit
+    : SubtargetFeature<"idx8bit", "UseIdx8Bit", "true",
+                       "Use 8-bit index registers (X=1)">;
+
 //===----------------------------------------------------------------------===//
 // W65816 Processors
 //===----------------------------------------------------------------------===//
@@ -33,7 +43,19 @@ def FeatureSNES
 class Proc<string Name, list<SubtargetFeature> Features>
     : Processor<Name, NoItineraries, Features>;
 
+// Default: 16-bit accumulator and index registers (M=0, X=0)
 def : Proc<"w65816", []>;
+
+// 8-bit accumulator, 16-bit index (M=1, X=0)
+def : Proc<"w65816-m8", [FeatureAcc8Bit]>;
+
+// 16-bit accumulator, 8-bit index (M=0, X=1)
+def : Proc<"w65816-x8", [FeatureIdx8Bit]>;
+
+// Both 8-bit (M=1, X=1)
+def : Proc<"w65816-mx8", [FeatureAcc8Bit, FeatureIdx8Bit]>;
+
+// SNES target with long addressing
 def : Proc<"snes", [FeatureSNES, FeatureLongAddressing]>;
 
 //===----------------------------------------------------------------------===//

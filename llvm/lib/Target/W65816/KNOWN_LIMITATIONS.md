@@ -148,22 +148,87 @@ The XCE instruction (0xFB) exchanges carry and emulation bits.
 - `BRK #sig` - Software Break
 - `COP #sig` - Co-processor Enable
 
-### 8/16-bit Mode Switching
-- Currently assumes 16-bit mode throughout
-- No support for dynamic M/X flag changes
-- 8-bit operations use sub-registers but mode switching not implemented
+### 8/16-bit Mode Selection (Compile-Time Feature Flags)
+The W65816 supports 8-bit or 16-bit width for accumulator (M flag) and index registers (X flag)
+independently. This is now supported via compile-time feature flags:
+
+**Usage:**
+```bash
+llc -march=w65816 test.ll                    # 16-bit mode (default, M=0, X=0)
+llc -march=w65816 -mattr=+acc8bit test.ll    # 8-bit accumulator (M=1)
+llc -march=w65816 -mattr=+idx8bit test.ll    # 8-bit index registers (X=1)
+llc -march=w65816 -mattr=+acc8bit,+idx8bit   # Both 8-bit (limited support)
+```
+
+**Processor variants:**
+- `w65816` - Default 16-bit mode
+- `w65816-m8` - 8-bit accumulator, 16-bit index
+- `w65816-x8` - 16-bit accumulator, 8-bit index
+- `w65816-mx8` - Both 8-bit
+
+**How it works:**
+- Functions emit `SEP #$20` (M=1) or `SEP #$10` (X=1) in prologue to set hardware mode
+- The compiler selects appropriate register classes and instruction patterns
+- Type legalization promotes i8 to i16 in 16-bit mode; i8 is legal in 8-bit accumulator mode
+
+**Limitations:**
+- The combination of +acc8bit,+idx8bit has limited support for i16 values
+  (there would be no 16-bit registers available)
+- Runtime mode switching is NOT supported - the mode is fixed at compile time
+- For temporary mode switches, use inline assembly with SEP/REP instructions
+- Common SNES patterns like 8-bit accumulator + 16-bit index work well
 
 ### 8-bit (i8) Type Support
 **Working:**
 - i8 loads from absolute addresses (zextloadi8/sextloadi8 → LDA8_abs)
 - i8 stores to absolute addresses (truncstorei8 → STA8_abs)
 - i8 arithmetic (add, sub) - promotes to i16
+- i8 loads through pointers (`load i8, ptr %p`) - uses LDA8indirect pseudo
+- i8 stores through pointers (`store i8 %v, ptr %p`) - uses STA8indirect pseudo
 
-**Not Working:**
-- i8 loads through pointers (`load i8, ptr %p`) - requires indirect 8-bit load patterns
-- i8 stores through pointers (`store i8 %v, ptr %p`) - requires indirect 8-bit store patterns
+The indirect 8-bit operations use SEP/REP mode switching with stack-relative indirect addressing:
+```asm
+; 8-bit load through pointer (load i8, ptr %p):
+sta 1,s           ; store pointer to stack
+sep #32           ; switch to 8-bit mode
+ldy #0            ; index = 0
+lda (1,s),y       ; load through pointer
+rep #32           ; switch back to 16-bit mode
+and #255          ; zero-extend result
 
-**Workaround:** Use i16 types instead of i8 where possible, or use absolute addresses for byte access.
+; 8-bit store through pointer (store i8 %v, ptr %p):
+sta 1,s           ; store pointer to stack
+txa               ; move value to A (if needed)
+sep #32           ; switch to 8-bit mode
+ldy #0            ; index = 0
+sta (1,s),y       ; store through pointer
+rep #32           ; switch back to 16-bit mode
+```
+
+- Indexed 8-bit array access (`ptr[i]` for byte arrays) - uses LDA8indirectIdx/STA8indirectIdx pseudos
+
+The indexed 8-bit operations combine pointer indirect addressing with variable index:
+```asm
+; 8-bit indexed load (load i8, ptr + idx):
+pha               ; save A for prologue
+sta 1,s           ; store pointer to stack
+txy               ; move index to Y
+sep #32           ; switch to 8-bit mode
+lda (1,s),y       ; load through pointer + index
+rep #32           ; switch back to 16-bit mode
+and #255          ; zero-extend result
+
+; 8-bit indexed store (store i8 val, ptr + idx):
+phy               ; save value (in Y) to stack
+sta 1,s           ; store pointer to stack
+txy               ; move index (in X) to Y
+pla               ; pull saved value to A
+sep #32           ; switch to 8-bit mode
+sta (1,s),y       ; store through pointer + index
+rep #32           ; switch back to 16-bit mode
+```
+
+**All 8-bit indirect operations now working.**
 
 ### Addressing Modes
 **Working:**
@@ -259,8 +324,8 @@ pla           ; deallocate 4 bytes
 5. ~~Shift by variable amount~~ (DONE - uses loop with DEX/BNE)
 
 ### Low Priority
-1. 8-bit mode support
-2. Long (24-bit) addressing
+1. ~~8-bit mode support~~ (DONE - compile-time feature flags +acc8bit, +idx8bit)
+2. ~~Long (24-bit) addressing~~ (DONE - for globals in .fardata, .rodata, .romdata)
 3. Interrupt handling
 
 ## Test Cases That Fail

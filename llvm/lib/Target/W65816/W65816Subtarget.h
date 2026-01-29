@@ -58,12 +58,20 @@ public:
   bool hasLongAddressing() const { return HasLongAddressing; }
   bool isSNES() const { return IsSNES; }
 
+  // 8-bit mode predicates
+  bool uses8BitAccumulator() const { return UseAcc8Bit; }
+  bool uses8BitIndex() const { return UseIdx8Bit; }
+
   bool enableSubRegLiveness() const override { return true; }
 
 private:
   // Subtarget features
   bool HasLongAddressing = false;
   bool IsSNES = false;
+
+  // 8-bit mode flags (M and X processor status bits)
+  bool UseAcc8Bit = false;  // M flag: true = 8-bit accumulator
+  bool UseIdx8Bit = false;  // X flag: true = 8-bit index registers
 
   W65816InstrInfo InstrInfo;
   W65816FrameLowering FrameLowering;

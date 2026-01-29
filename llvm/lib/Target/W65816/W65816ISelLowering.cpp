@@ -40,10 +40,27 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
                                            const W65816Subtarget &STI)
     : TargetLowering(TM, STI), Subtarget(STI) {
 
-  // Set up the register classes
-  // Note: We only register i16 as legal. i8 values will be promoted to i16.
-  // 8-bit memory operations are handled through special load/store patterns.
-  // addRegisterClass(MVT::i8, &W65816::GPR8RegClass);  // Keep i8 illegal
+  // Set up the register classes based on M and X processor flags
+  // The W65816 can independently control accumulator width (M flag)
+  // and index register width (X flag)
+
+  if (STI.uses8BitAccumulator()) {
+    // 8-bit accumulator mode (M=1)
+    addRegisterClass(MVT::i8, &W65816::ACC8RegClass);
+  } else {
+    // 16-bit accumulator mode (M=0, default)
+    addRegisterClass(MVT::i16, &W65816::ACC16RegClass);
+  }
+
+  if (STI.uses8BitIndex()) {
+    // 8-bit index register mode (X=1)
+    addRegisterClass(MVT::i8, &W65816::IDX8RegClass);
+  } else {
+    // 16-bit index register mode (X=0, default)
+    addRegisterClass(MVT::i16, &W65816::IDX16RegClass);
+  }
+
+  // Always add GPR16 for 16-bit operations (needed for pointers at minimum)
   addRegisterClass(MVT::i16, &W65816::GPR16RegClass);
 
   // Compute derived properties from the register classes
@@ -133,15 +150,28 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   // For stores: truncate 16-bit values to 8-bit
   setTruncStoreAction(MVT::i16, MVT::i8, Custom);
 
-  // Promote i8 operations to i16 (we operate in 16-bit mode mostly)
-  setOperationAction(ISD::ADD, MVT::i8, Promote);
-  setOperationAction(ISD::SUB, MVT::i8, Promote);
-  setOperationAction(ISD::AND, MVT::i8, Promote);
-  setOperationAction(ISD::OR, MVT::i8, Promote);
-  setOperationAction(ISD::XOR, MVT::i8, Promote);
-  setOperationAction(ISD::SHL, MVT::i8, Promote);
-  setOperationAction(ISD::SRL, MVT::i8, Promote);
-  setOperationAction(ISD::SRA, MVT::i8, Promote);
+  // i8 operation actions depend on accumulator mode
+  if (STI.uses8BitAccumulator()) {
+    // In 8-bit accumulator mode, i8 operations are legal
+    setOperationAction(ISD::ADD, MVT::i8, Legal);
+    setOperationAction(ISD::SUB, MVT::i8, Legal);
+    setOperationAction(ISD::AND, MVT::i8, Legal);
+    setOperationAction(ISD::OR, MVT::i8, Legal);
+    setOperationAction(ISD::XOR, MVT::i8, Legal);
+    setOperationAction(ISD::SHL, MVT::i8, Legal);
+    setOperationAction(ISD::SRL, MVT::i8, Legal);
+    setOperationAction(ISD::SRA, MVT::i8, Legal);
+  } else {
+    // In 16-bit accumulator mode, promote i8 to i16
+    setOperationAction(ISD::ADD, MVT::i8, Promote);
+    setOperationAction(ISD::SUB, MVT::i8, Promote);
+    setOperationAction(ISD::AND, MVT::i8, Promote);
+    setOperationAction(ISD::OR, MVT::i8, Promote);
+    setOperationAction(ISD::XOR, MVT::i8, Promote);
+    setOperationAction(ISD::SHL, MVT::i8, Promote);
+    setOperationAction(ISD::SRL, MVT::i8, Promote);
+    setOperationAction(ISD::SRA, MVT::i8, Promote);
+  }
 
   // Min/max signed and unsigned
   setMinimumJumpTableEntries(INT_MAX); // Don't use jump tables

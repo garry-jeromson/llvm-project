@@ -48,6 +48,22 @@ def brtarget16 : Operand<OtherVT> {
 }
 
 //===----------------------------------------------------------------------===//
+// W65816 Subtarget Feature Predicates
+//===----------------------------------------------------------------------===//
+
+// Accumulator width predicates (M flag)
+def UseAcc8Bit : Predicate<"Subtarget->uses8BitAccumulator()">,
+                 AssemblerPredicate<(all_of FeatureAcc8Bit), "8-bit accumulator">;
+def UseAcc16Bit : Predicate<"!Subtarget->uses8BitAccumulator()">,
+                  AssemblerPredicate<(all_of (not FeatureAcc8Bit)), "16-bit accumulator">;
+
+// Index register width predicates (X flag)
+def UseIdx8Bit : Predicate<"Subtarget->uses8BitIndex()">,
+                 AssemblerPredicate<(all_of FeatureIdx8Bit), "8-bit index registers">;
+def UseIdx16Bit : Predicate<"!Subtarget->uses8BitIndex()">,
+                  AssemblerPredicate<(all_of (not FeatureIdx8Bit)), "16-bit index registers">;
+
+//===----------------------------------------------------------------------===//
 // W65816 Complex Pattern Definitions
 //===----------------------------------------------------------------------===//
 
@@ -94,11 +110,11 @@ def W65816brcond : SDNode<"W65816ISD::BRCOND", SDT_W65816BrCond,
                           [SDNPHasChain, SDNPInGlue]>;
 
 //===----------------------------------------------------------------------===//
-// Accumulator Load/Store Instructions
+// Accumulator Load/Store Instructions (16-bit mode, M=0)
 //===----------------------------------------------------------------------===//
 
-// LDA - Load Accumulator
-let Defs = [P] in {
+// LDA - Load Accumulator (16-bit)
+let Defs = [P], Predicates = [UseAcc16Bit] in {
   // LDA immediate 16-bit
   // Note: operand name must match encoding field 'addr'
   def LDA_imm16 : W65816Inst24<0xA9, (outs ACC16:$dst), (ins imm16:$addr),
@@ -111,11 +127,34 @@ let Defs = [P] in {
                              [(set ACC16:$dst, (load addr:$addr))]>;
 }
 
-// STA - Store Accumulator
-// STA absolute
+// STA - Store Accumulator (16-bit)
+let Predicates = [UseAcc16Bit] in
 def STA_abs : W65816Inst24<0x8D, (outs), (ins ACC16:$src, addr16:$addr),
                            "sta\t$addr",
                            [(store ACC16:$src, addr:$addr)]>;
+
+//===----------------------------------------------------------------------===//
+// Accumulator Load/Store Instructions (8-bit mode, M=1)
+//===----------------------------------------------------------------------===//
+
+let Defs = [P], Predicates = [UseAcc8Bit] in {
+  // LDA immediate 8-bit (in 8-bit acc mode)
+  // Note: Same opcode as 16-bit, but immediate is only 1 byte
+  def LDA_imm8_m8 : W65816Inst16<0xA9, (outs ACC8:$dst), (ins imm8:$imm),
+                                 "lda\t#$imm",
+                                 [(set ACC8:$dst, imm:$imm)]>;
+
+  // LDA absolute (8-bit mode) - uses 3-byte format (opcode + 16-bit address)
+  def LDA_abs_m8 : W65816Inst24<0xAD, (outs ACC8:$dst), (ins addr16:$addr),
+                                "lda\t$addr",
+                                [(set ACC8:$dst, (load addr:$addr))]>;
+}
+
+// STA absolute (8-bit mode) - uses 3-byte format (opcode + 16-bit address)
+let Predicates = [UseAcc8Bit] in
+def STA_abs_m8 : W65816Inst24<0x8D, (outs), (ins ACC8:$src, addr16:$addr),
+                              "sta\t$addr",
+                              [(store ACC8:$src, addr:$addr)]>;
 
 // Stack-relative addressing modes for load/store
 let Defs = [P] in {
@@ -350,11 +389,11 @@ def STA_dpIndLongY : W65816Inst16<0x97, (outs), (ins ACC16:$src, addr8dp:$imm),
 }
 
 //===----------------------------------------------------------------------===//
-// Index Register Load/Store Instructions
+// Index Register Load/Store Instructions (16-bit mode, X=0)
 //===----------------------------------------------------------------------===//
 
-let Defs = [P] in {
-  // LDX - Load X Register
+let Defs = [P], Predicates = [UseIdx16Bit] in {
+  // LDX - Load X Register (16-bit)
   // Note: output is X register class to enable pattern matching for X reg
   def LDX_imm16 : W65816Inst24<0xA2, (outs X16:$dst), (ins imm16:$addr),
                                "ldx\t#$addr",
@@ -364,7 +403,7 @@ let Defs = [P] in {
                              "ldx\t$addr",
                              [(set X16:$dst, (load addr:$addr))]>;
 
-  // LDY - Load Y Register
+  // LDY - Load Y Register (16-bit)
   def LDY_imm16 : W65816Inst24<0xA0, (outs Y16:$dst), (ins imm16:$addr),
                                "ldy\t#$addr",
                                [(set Y16:$dst, imm:$addr)]>;
@@ -373,15 +412,56 @@ let Defs = [P] in {
                              "ldy\t$addr", []>;
 }
 
-// STX - Store X Register
+//===----------------------------------------------------------------------===//
+// Index Register Load/Store Instructions (8-bit mode, X=1)
+//===----------------------------------------------------------------------===//
+
+let Defs = [P], Predicates = [UseIdx8Bit] in {
+  // LDX - Load X Register (8-bit)
+  // Same opcode as 16-bit, but immediate is only 1 byte
+  def LDX_imm8_x8 : W65816Inst16<0xA2, (outs IDX8:$dst), (ins imm8:$imm),
+                                 "ldx\t#$imm",
+                                 [(set IDX8:$dst, imm:$imm)]>;
+
+  // LDX absolute (8-bit index mode) - uses 3-byte format
+  def LDX_abs_x8 : W65816Inst24<0xAE, (outs IDX8:$dst), (ins addr16:$addr),
+                                "ldx\t$addr",
+                                [(set IDX8:$dst, (load addr:$addr))]>;
+
+  // LDY - Load Y Register (8-bit)
+  def LDY_imm8_x8 : W65816Inst16<0xA0, (outs IDX8:$dst), (ins imm8:$imm),
+                                 "ldy\t#$imm",
+                                 [(set IDX8:$dst, imm:$imm)]>;
+
+  // LDY absolute (8-bit index mode) - uses 3-byte format
+  def LDY_abs_x8 : W65816Inst24<0xAC, (outs IDX8:$dst), (ins addr16:$addr),
+                                "ldy\t$addr",
+                                [(set IDX8:$dst, (load addr:$addr))]>;
+}
+
+// STX - Store X Register (16-bit mode)
+let Predicates = [UseIdx16Bit] in
 def STX_abs : W65816Inst24<0x8E, (outs), (ins IDX16:$src, addr16:$addr),
                            "stx\t$addr",
                            []>;
 
-// STY - Store Y Register
+// STY - Store Y Register (16-bit mode)
+let Predicates = [UseIdx16Bit] in
 def STY_abs : W65816Inst24<0x8C, (outs), (ins IDX16:$src, addr16:$addr),
                            "sty\t$addr",
                            []>;
+
+// STX - Store X Register (8-bit mode) - uses 3-byte format
+let Predicates = [UseIdx8Bit] in
+def STX_abs_x8 : W65816Inst24<0x8E, (outs), (ins IDX8:$src, addr16:$addr),
+                              "stx\t$addr",
+                              []>;
+
+// STY - Store Y Register (8-bit mode) - uses 3-byte format
+let Predicates = [UseIdx8Bit] in
+def STY_abs_x8 : W65816Inst24<0x8C, (outs), (ins IDX8:$src, addr16:$addr),
+                              "sty\t$addr",
+                              []>;
 
 //===----------------------------------------------------------------------===//
 // STZ - Store Zero to Memory
@@ -1580,6 +1660,59 @@ let Defs = [A, P], mayStore = 1, hasSideEffects = 0 in {
 let Defs = [A, P], mayStore = 1, hasSideEffects = 0 in {
   def STA8_sr : Pseudo<(outs), (ins ACC16:$src, imm8:$offset),
                        "# STA8_sr $src, $offset", []>;
+}
+
+// LDA8_srIndY - Load 8-bit value using stack-relative indirect indexed addressing
+// The address of the target is stored at (SP + offset), then load from that address + Y
+// Expands to: SEP #$20; LDY #0; LDA (offset,S),Y; REP #$20; AND #$00FF
+let Defs = [A, Y, P], mayLoad = 1, hasSideEffects = 0 in {
+  def LDA8_srIndY : Pseudo<(outs ACC16:$dst), (ins imm8:$offset),
+                           "# LDA8_srIndY $dst, $offset", []>;
+}
+
+// STA8_srIndY - Store 8-bit value using stack-relative indirect indexed addressing
+// Expands to: SEP #$20; LDY #0; STA (offset,S),Y; REP #$20
+let Defs = [Y, P], Uses = [A], mayStore = 1, hasSideEffects = 0 in {
+  def STA8_srIndY : Pseudo<(outs), (ins ACC16:$src, imm8:$offset),
+                           "# STA8_srIndY $src, $offset", []>;
+}
+
+// LDA8indirect - Load 8-bit value through pointer with mode switching
+// Operands: (dst, stack_slot, ptr, index)
+// Expands to: STA ptr to stack_slot, SEP #$20, LDY index, LDA (slot,S),Y, REP #$20, AND #$FF
+// Note: Only defines Y and P, A is the output operand
+let Defs = [Y, P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
+  def LDA8indirect : Pseudo<(outs ACC16:$dst), (ins i16imm:$slot, GPR16:$ptr, i16imm:$idx),
+                            "# LDA8indirect $dst, [$slot], $ptr, $idx", []>;
+}
+
+// STA8indirect - Store 8-bit value through pointer with mode switching
+// Operands: (src, stack_slot, ptr, index)
+// Src can be in any GPR - expansion handles moving to A before store
+// Expands to: store ptr to stack_slot, move src to A, SEP #$20, LDY index, STA (slot,S),Y, REP #$20
+let Defs = [A, Y, P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
+  def STA8indirect : Pseudo<(outs), (ins GPR16:$src, i16imm:$slot, GPR16:$ptr, i16imm:$idx),
+                            "# STA8indirect $src, [$slot], $ptr, $idx", []>;
+}
+
+// LDA8indirectIdx - Load 8-bit value through pointer+index with mode switching
+// Operands: (dst, stack_slot, ptr, idx)
+// ptr is base pointer, idx is byte offset (in a GPR)
+// Expands to: STA ptr to stack_slot, move idx to Y, SEP #$20, LDA (slot,S),Y, REP #$20, AND #$FF
+let Defs = [Y, P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
+  def LDA8indirectIdx : Pseudo<(outs ACC16:$dst),
+                               (ins i32imm:$stack_slot, GPR16:$ptr, GPR16:$idx),
+                               "# LDA8indirectIdx $dst, [$stack_slot], $ptr, $idx", []>;
+}
+
+// STA8indirectIdx - Store 8-bit value through pointer+index with mode switching
+// Operands: (src, stack_slot, ptr, idx)
+// src is value, ptr is base pointer, idx is byte offset (in a GPR)
+// Expands to: store ptr to stack_slot, move idx to Y, move src to A, SEP #$20, STA (slot,S),Y, REP #$20
+let Defs = [A, Y, P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
+  def STA8indirectIdx : Pseudo<(outs),
+                               (ins GPR16:$src, i32imm:$stack_slot, GPR16:$ptr, GPR16:$idx),
+                               "# STA8indirectIdx $src, [$stack_slot], $ptr, $idx", []>;
 }
 
 //===----------------------------------------------------------------------===//

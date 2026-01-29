@@ -446,6 +446,73 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         return;
       }
     }
+
+    // Handle 8-bit truncating stores (truncstorei8) through pointers
+    // These need mode switching: SEP #$20, store, REP #$20
+    if (ST->getMemoryVT() == MVT::i8 && ST->isTruncatingStore()) {
+
+      // Check for indexed pointer access: (store i8, (add ptr, offset))
+      // This handles ptr[i] = val for byte arrays
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check if this is (add ptr, offset) where neither is a global
+        bool LHSIsWrapper = (LHS.getOpcode() == W65816ISD::WRAPPER);
+        bool RHSIsWrapper = (RHS.getOpcode() == W65816ISD::WRAPPER);
+
+        if (!LHSIsWrapper && !RHSIsWrapper) {
+          // This is indexed pointer access for byte array: ptr[i] = val
+          // LHS is the base pointer, RHS is the byte offset
+          MachineFunction &MF = CurDAG->getMachineFunction();
+          MachineFrameInfo &MFI = MF.getFrameInfo();
+
+          int FI = MFI.CreateStackObject(2, Align(2), false);
+          SDValue StackSlot = CurDAG->getTargetFrameIndex(FI, MVT::i16);
+
+          // Use STA8indirectIdx pseudo
+          SDValue Ops[] = {Value, StackSlot, LHS, RHS, Chain};
+          MachineSDNode *Store =
+              CurDAG->getMachineNode(W65816::STA8indirectIdx, DL, MVT::Other, Ops);
+
+          CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+          ReplaceNode(N, Store);
+          return;
+        }
+      }
+
+      // Check for simple pointer dereference through register
+      // This handles cases like *(u8*)ptr = val where ptr is in a register
+      if (!isa<FrameIndexSDNode>(Addr) &&
+          Addr.getOpcode() != W65816ISD::WRAPPER &&
+          Addr.getOpcode() != ISD::ADD &&
+          !isa<GlobalAddressSDNode>(Addr)) {
+
+        // The address is in a register - use stack-relative indirect with mode switch
+        MachineFunction &MF = CurDAG->getMachineFunction();
+        MachineFrameInfo &MFI = MF.getFrameInfo();
+
+        // Create a stack slot to hold the pointer (2 bytes, aligned to 2)
+        int FI = MFI.CreateStackObject(2, Align(2), false);
+        SDValue StackSlot = CurDAG->getTargetFrameIndex(FI, MVT::i16);
+
+        // Use STA8indirect pseudo which will:
+        // 1. Store Addr to stack slot
+        // 2. SEP #$20
+        // 3. LDY #0
+        // 4. STA (FI,S),Y
+        // 5. REP #$20
+        SDValue ZeroIdx = CurDAG->getTargetConstant(0, DL, MVT::i16);
+
+        SDValue Ops[] = {Value, StackSlot, Addr, ZeroIdx, Chain};
+        MachineSDNode *Store =
+            CurDAG->getMachineNode(W65816::STA8indirect, DL, MVT::Other, Ops);
+
+        CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+        ReplaceNode(N, Store);
+        return;
+      }
+    }
     break;
   }
 
@@ -634,7 +701,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       // 2. Use LDA (offset,S),Y with Y=0 to load through it
       if (!isa<FrameIndexSDNode>(Addr) &&
           Addr.getOpcode() != W65816ISD::WRAPPER &&
-          Addr.getOpcode() != ISD::ADD) {
+          Addr.getOpcode() != ISD::ADD &&
+          !isa<GlobalAddressSDNode>(Addr)) {
         // The address is in a register - use stack-relative indirect
 
         MachineFunction &MF = CurDAG->getMachineFunction();
@@ -665,6 +733,77 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
         MachineSDNode *Load =
             CurDAG->getMachineNode(W65816::LDAindirect, DL, VTs, Ops);
+
+        CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+        ReplaceNode(N, Load);
+        return;
+      }
+    }
+
+    // Handle 8-bit loads with extension (zextloadi8, sextloadi8, extloadi8)
+    // These need mode switching: SEP #$20, load, REP #$20, AND #$FF
+    if (LD->getMemoryVT() == MVT::i8 &&
+        LD->getExtensionType() != ISD::NON_EXTLOAD) {
+
+      // Check for indexed pointer access: (load i8, (add ptr, offset))
+      // This handles ptr[i] for byte arrays
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check if this is (add ptr, offset) where neither is a global
+        bool LHSIsWrapper = (LHS.getOpcode() == W65816ISD::WRAPPER);
+        bool RHSIsWrapper = (RHS.getOpcode() == W65816ISD::WRAPPER);
+
+        if (!LHSIsWrapper && !RHSIsWrapper) {
+          // This is indexed pointer access for byte array: ptr[i]
+          // LHS is the base pointer, RHS is the byte offset
+          MachineFunction &MF = CurDAG->getMachineFunction();
+          MachineFrameInfo &MFI = MF.getFrameInfo();
+
+          int FI = MFI.CreateStackObject(2, Align(2), false);
+          SDValue StackSlot = CurDAG->getTargetFrameIndex(FI, MVT::i16);
+
+          // Use LDA8indirectIdx pseudo
+          SDValue Ops[] = {StackSlot, LHS, RHS, Chain};
+          SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+          MachineSDNode *Load =
+              CurDAG->getMachineNode(W65816::LDA8indirectIdx, DL, VTs, Ops);
+
+          CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+          ReplaceNode(N, Load);
+          return;
+        }
+      }
+
+      // Check for simple pointer dereference through register
+      // This handles cases like *(u8*)ptr where ptr is in a register
+      if (!isa<FrameIndexSDNode>(Addr) &&
+          Addr.getOpcode() != W65816ISD::WRAPPER &&
+          Addr.getOpcode() != ISD::ADD &&
+          !isa<GlobalAddressSDNode>(Addr)) {
+
+        // The address is in a register - use stack-relative indirect with mode switch
+        MachineFunction &MF = CurDAG->getMachineFunction();
+        MachineFrameInfo &MFI = MF.getFrameInfo();
+
+        // Create a stack slot to hold the pointer (2 bytes, aligned to 2)
+        int FI = MFI.CreateStackObject(2, Align(2), false);
+        SDValue StackSlot = CurDAG->getTargetFrameIndex(FI, MVT::i16);
+
+        // Use LDA8indirect pseudo which will:
+        // 1. Store Addr to stack slot
+        // 2. SEP #$20
+        // 3. LDY #0
+        // 4. LDA (FI,S),Y
+        // 5. REP #$20
+        // 6. AND #$FF
+        SDValue ZeroIdx = CurDAG->getTargetConstant(0, DL, MVT::i16);
+
+        SDValue Ops[] = {StackSlot, Addr, ZeroIdx, Chain};
+        SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+        MachineSDNode *Load =
+            CurDAG->getMachineNode(W65816::LDA8indirect, DL, VTs, Ops);
 
         CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
         ReplaceNode(N, Load);

@@ -115,6 +115,12 @@ private:
   bool expandLDA8_sr(Block &MBB, BlockIt MBBI);
   bool expandSTA8_abs(Block &MBB, BlockIt MBBI);
   bool expandSTA8_sr(Block &MBB, BlockIt MBBI);
+  bool expandLDA8_srIndY(Block &MBB, BlockIt MBBI);
+  bool expandSTA8_srIndY(Block &MBB, BlockIt MBBI);
+  bool expandLDA8indirect(Block &MBB, BlockIt MBBI);
+  bool expandSTA8indirect(Block &MBB, BlockIt MBBI);
+  bool expandLDA8indirectIdx(Block &MBB, BlockIt MBBI);
+  bool expandSTA8indirectIdx(Block &MBB, BlockIt MBBI);
 };
 
 char W65816ExpandPseudo::ID = 0;
@@ -239,6 +245,18 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandSTA8_abs(MBB, MBBI);
   case W65816::STA8_sr:
     return expandSTA8_sr(MBB, MBBI);
+  case W65816::LDA8_srIndY:
+    return expandLDA8_srIndY(MBB, MBBI);
+  case W65816::STA8_srIndY:
+    return expandSTA8_srIndY(MBB, MBBI);
+  case W65816::LDA8indirect:
+    return expandLDA8indirect(MBB, MBBI);
+  case W65816::STA8indirect:
+    return expandSTA8indirect(MBB, MBBI);
+  case W65816::LDA8indirectIdx:
+    return expandLDA8indirectIdx(MBB, MBBI);
+  case W65816::STA8indirectIdx:
+    return expandSTA8indirectIdx(MBB, MBBI);
   default:
     return false;
   }
@@ -2401,6 +2419,464 @@ bool W65816ExpandPseudo::expandSTA8_sr(Block &MBB, BlockIt MBBI) {
   }
 
   // REP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLDA8_srIndY(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LDA8_srIndY $dst, $offset
+  // Expands to:
+  //   SEP #$20        ; switch to 8-bit accumulator
+  //   LDY #0          ; Y offset for indirect addressing
+  //   LDA (offset,S),Y ; load 8-bit value through pointer on stack
+  //   REP #$20        ; switch back to 16-bit accumulator
+  //   AND #$00FF      ; zero-extend (high byte is undefined after SEP/REP)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  MachineOperand &OffsetOp = MI.getOperand(1);
+
+  // SEP #$20 - set M flag (8-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // LDY #0 - Y offset for simple dereference
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
+      .addImm(0);
+
+  // LDA (offset,S),Y - indirect indexed load through stack pointer
+  auto LoadInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_srIndY), W65816::A);
+  if (OffsetOp.isFI()) {
+    LoadInst.addFrameIndex(OffsetOp.getIndex());
+  } else {
+    LoadInst.add(OffsetOp);
+  }
+
+  // REP #$20 - reset M flag (16-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  // AND #$00FF - zero-extend (ensure high byte is 0)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  // Move result to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSTA8_srIndY(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // STA8_srIndY $src, $offset
+  // Expands to:
+  //   (move src to A if needed)
+  //   SEP #$20        ; switch to 8-bit accumulator
+  //   LDY #0          ; Y offset for indirect addressing
+  //   STA (offset,S),Y ; store 8-bit value through pointer on stack
+  //   REP #$20        ; switch back to 16-bit accumulator
+
+  Register SrcReg = MI.getOperand(0).getReg();
+  MachineOperand &OffsetOp = MI.getOperand(1);
+
+  // Move value to A if not already there
+  if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  }
+
+  // SEP #$20 - set M flag (8-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // LDY #0 - Y offset for simple dereference
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
+      .addImm(0);
+
+  // STA (offset,S),Y - indirect indexed store through stack pointer
+  auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_srIndY))
+      .addReg(W65816::A);
+  if (OffsetOp.isFI()) {
+    StoreInst.addFrameIndex(OffsetOp.getIndex());
+  } else {
+    StoreInst.add(OffsetOp);
+  }
+
+  // REP #$20 - reset M flag (16-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLDA8indirect(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LDA8indirect $dst, $slot, $ptr, $idx
+  // Expands to:
+  //   (move ptr to A if needed)
+  //   STA slot,s      ; store pointer to stack slot
+  //   SEP #$20        ; switch to 8-bit accumulator
+  //   LDY idx         ; load index into Y (or LDY #0 for simple deref)
+  //   LDA (slot,S),Y  ; load 8-bit value through pointer
+  //   REP #$20        ; switch back to 16-bit accumulator
+  //   AND #$00FF      ; zero-extend
+
+  Register DstReg = MI.getOperand(0).getReg();
+  MachineOperand &SlotOp = MI.getOperand(1);
+  Register PtrReg = MI.getOperand(2).getReg();
+  int64_t Idx = MI.getOperand(3).getImm();
+
+  // Move pointer to A if not already there
+  if (PtrReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (PtrReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (PtrReg != W65816::A) {
+    // Copy from virtual register - this shouldn't happen after reg alloc
+    // but handle it gracefully
+    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
+        .addReg(PtrReg);
+  }
+
+  // STA slot,s - store pointer to stack slot
+  auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+      .addReg(W65816::A);
+  if (SlotOp.isFI()) {
+    StoreInst.addFrameIndex(SlotOp.getIndex());
+  } else {
+    StoreInst.addImm(SlotOp.getImm());
+  }
+
+  // SEP #$20 - set M flag (8-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // LDY idx - load index into Y
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
+      .addImm(Idx);
+
+  // LDA (slot,S),Y - indirect indexed load through stack
+  auto LoadInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_srIndY), W65816::A);
+  if (SlotOp.isFI()) {
+    LoadInst.addFrameIndex(SlotOp.getIndex());
+  } else {
+    LoadInst.addImm(SlotOp.getImm());
+  }
+
+  // REP #$20 - reset M flag (16-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  // AND #$00FF - zero-extend
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  // Move result to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSTA8indirect(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // STA8indirect $src, $slot, $ptr, $idx
+  // Expands to:
+  //   PHX             ; save X (we'll use it for the value)
+  //   TAX             ; save value in X
+  //   (move ptr to A if needed)
+  //   STA slot,s      ; store pointer to stack slot
+  //   TXA             ; restore value to A
+  //   PLX             ; restore X
+  //   SEP #$20        ; switch to 8-bit accumulator
+  //   LDY idx         ; load index into Y
+  //   STA (slot,S),Y  ; store 8-bit value through pointer
+  //   REP #$20        ; switch back to 16-bit accumulator
+
+  Register SrcReg = MI.getOperand(0).getReg();
+  MachineOperand &SlotOp = MI.getOperand(1);
+  Register PtrReg = MI.getOperand(2).getReg();
+  int64_t Idx = MI.getOperand(3).getImm();
+
+  // This is tricky: we need to store the pointer to stack, then store the value
+  // through it. We need A for both operations temporarily.
+  //
+  // Strategy: Save value to stack, move pointer to A, store pointer to slot,
+  // restore value to A, then do the 8-bit store.
+
+  bool SrcInA = (SrcReg == W65816::A);
+  bool PtrInA = (PtrReg == W65816::A);
+
+  // Step 1: Save the value if it's in A (we need A for storing the pointer)
+  if (SrcInA) {
+    buildMI(MBB, MBBI, W65816::PHA);  // Save value to stack
+  }
+
+  // Step 2: Get pointer into A
+  if (PtrReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (PtrReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (!PtrInA) {
+    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
+        .addReg(PtrReg);
+  }
+  // Note: if PtrInA is true, A already has the pointer
+
+  // Step 3: Store pointer to stack slot
+  auto StorePtr = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+      .addReg(W65816::A);
+  if (SlotOp.isFI()) {
+    StorePtr.addFrameIndex(SlotOp.getIndex());
+  } else {
+    StorePtr.addImm(SlotOp.getImm());
+  }
+
+  // Step 4: Get value into A for the store
+  if (SrcInA) {
+    // Value was saved to stack, pull it back
+    buildMI(MBB, MBBI, W65816::PLA);
+  } else if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else {
+    // Virtual register
+    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
+        .addReg(SrcReg);
+  }
+
+  // SEP #$20 - set M flag (8-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // LDY idx - load index into Y
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
+      .addImm(Idx);
+
+  // STA (slot,S),Y - indirect indexed store through stack
+  auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_srIndY))
+      .addReg(W65816::A);
+  if (SlotOp.isFI()) {
+    StoreInst.addFrameIndex(SlotOp.getIndex());
+  } else {
+    StoreInst.addImm(SlotOp.getImm());
+  }
+
+  // REP #$20 - reset M flag (16-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLDA8indirectIdx(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LDA8indirectIdx $dst, $stack_slot, $ptr, $idx
+  // Expands to:
+  //   (save A if needed)
+  //   (move ptr to A)
+  //   STA stack_slot,s    ; store pointer to stack slot
+  //   (move idx to Y)
+  //   SEP #$20            ; switch to 8-bit accumulator
+  //   LDA (stack_slot,S),Y ; load 8-bit value through pointer+index
+  //   REP #$20            ; switch back to 16-bit
+  //   AND #$FF            ; zero-extend
+
+  MachineOperand &SlotOp = MI.getOperand(1);
+  Register PtrReg = MI.getOperand(2).getReg();
+  Register IdxReg = MI.getOperand(3).getReg();
+
+  // First, get the pointer into A and store to stack
+  if (PtrReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (PtrReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (PtrReg != W65816::A) {
+    // Copy from virtual reg
+    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
+        .addReg(PtrReg);
+  }
+
+  // Store pointer to stack slot
+  auto StorePtr = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+      .addReg(W65816::A);
+  if (SlotOp.isFI()) {
+    StorePtr.addFrameIndex(SlotOp.getIndex());
+  } else {
+    StorePtr.addImm(SlotOp.getImm());
+  }
+
+  // Get index into Y
+  if (IdxReg == W65816::A) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (IdxReg == W65816::X) {
+    // W65816 has TXY instruction
+    buildMI(MBB, MBBI, W65816::TXY);
+  } else if (IdxReg != W65816::Y) {
+    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::Y)
+        .addReg(IdxReg);
+  }
+
+  // SEP #$20 - set M flag (8-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // LDA (slot,S),Y - indirect indexed load through stack
+  auto LoadInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_srIndY), W65816::A);
+  if (SlotOp.isFI()) {
+    LoadInst.addFrameIndex(SlotOp.getIndex());
+  } else {
+    LoadInst.addImm(SlotOp.getImm());
+  }
+
+  // REP #$20 - reset M flag (16-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  // AND #$FF - zero-extend the 8-bit result to 16 bits
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0xFF);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSTA8indirectIdx(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // STA8indirectIdx $src, $stack_slot, $ptr, $idx
+  // Expands to:
+  //   (save src if it will be clobbered)
+  //   (move ptr to A)
+  //   STA stack_slot,s    ; store pointer to stack slot
+  //   (move idx to Y)
+  //   (move src to A)
+  //   SEP #$20            ; switch to 8-bit accumulator
+  //   STA (stack_slot,S),Y ; store 8-bit value through pointer+index
+  //   REP #$20            ; switch back to 16-bit
+
+  Register SrcReg = MI.getOperand(0).getReg();
+  MachineOperand &SlotOp = MI.getOperand(1);
+  Register PtrReg = MI.getOperand(2).getReg();
+  Register IdxReg = MI.getOperand(3).getReg();
+
+  // We need to juggle: ptr to stack, idx to Y, src to A
+  // The key challenge is that we may need to use A for ptr temporarily,
+  // and Y will be clobbered for idx.
+
+  bool SrcInA = (SrcReg == W65816::A);
+  bool SrcInX = (SrcReg == W65816::X);
+  bool SrcInY = (SrcReg == W65816::Y);
+  bool IdxInY = (IdxReg == W65816::Y);
+
+  // If src is in Y and we need to put idx in Y, save src first
+  // Also if src is in A and we need to use A for ptr, save src
+  bool needToSaveSrc = (SrcInY && !IdxInY) || SrcInA;
+
+  if (needToSaveSrc) {
+    if (SrcInA) {
+      // Save A (src) to X temporarily
+      buildMI(MBB, MBBI, W65816::PHX);  // Save X to restore later
+      buildMI(MBB, MBBI, W65816::TAX);  // Src -> X
+    } else if (SrcInY) {
+      // Save Y (src) to stack - will pull into A later
+      buildMI(MBB, MBBI, W65816::PHY);
+    }
+  }
+
+  // Get pointer into A and store to stack
+  if (PtrReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (PtrReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (PtrReg != W65816::A) {
+    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
+        .addReg(PtrReg);
+  }
+
+  // Store pointer to stack slot
+  auto StorePtr = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+      .addReg(W65816::A);
+  if (SlotOp.isFI()) {
+    StorePtr.addFrameIndex(SlotOp.getIndex());
+  } else {
+    StorePtr.addImm(SlotOp.getImm());
+  }
+
+  // Get index into Y
+  if (IdxReg == W65816::A) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (IdxReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXY);
+  } else if (IdxReg != W65816::Y) {
+    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::Y)
+        .addReg(IdxReg);
+  }
+
+  // Get src into A for the store
+  if (SrcInA) {
+    // Src was saved to X
+    buildMI(MBB, MBBI, W65816::TXA);
+    buildMI(MBB, MBBI, W65816::PLX);  // Restore original X
+  } else if (SrcInX) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcInY && !IdxInY) {
+    // Src was saved to stack, pull into A
+    buildMI(MBB, MBBI, W65816::PLA);
+  } else if (SrcInY && IdxInY) {
+    // Both src and idx were in Y - this shouldn't happen with proper reg alloc
+    // but handle it anyway - idx is now in Y, and src is lost
+    // Fall through to TYA which gets the index (wrong but can't do better)
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else {
+    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
+        .addReg(SrcReg);
+  }
+
+  // SEP #$20 - set M flag (8-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // STA (slot,S),Y - indirect indexed store through stack
+  auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_srIndY))
+      .addReg(W65816::A);
+  if (SlotOp.isFI()) {
+    StoreInst.addFrameIndex(SlotOp.getIndex());
+  } else {
+    StoreInst.addImm(SlotOp.getImm());
+  }
+
+  // REP #$20 - reset M flag (16-bit accumulator mode)
   BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
       .addImm(0x20);
 

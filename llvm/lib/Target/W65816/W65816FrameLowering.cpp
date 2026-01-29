@@ -55,6 +55,20 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
   while (MBBI != MBB.end() && MBBI->isDebugInstr())
     ++MBBI;
 
+  // Set processor mode based on subtarget features
+  // This ensures the hardware mode matches what the compiler expects
+  // SEP #$20 sets M=1 (8-bit accumulator), SEP #$10 sets X=1 (8-bit index)
+  unsigned ModeSetBits = 0;
+  if (STI.uses8BitAccumulator())
+    ModeSetBits |= 0x20;  // M flag
+  if (STI.uses8BitIndex())
+    ModeSetBits |= 0x10;  // X flag
+
+  if (ModeSetBits != 0) {
+    // Emit SEP to set the 8-bit mode(s)
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::SEP)).addImm(ModeSetBits);
+  }
+
   // Get the number of bytes to allocate from the FrameInfo
   uint64_t StackSize = MFI.getStackSize();
 
