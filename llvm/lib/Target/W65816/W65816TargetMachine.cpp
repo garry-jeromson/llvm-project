@@ -95,6 +95,8 @@ bool W65816PassConfig::addInstSelector() {
 void W65816PassConfig::addPreEmitPass() {
   // Expand pseudo instructions before branch relaxation
   addPass(createW65816ExpandPseudoPass());
+  // Peephole optimizations (eliminate redundant transfers)
+  addPass(createW65816PeepholeOptPass());
   // Add branch relaxation pass before emission
   addPass(&BranchRelaxationPassID);
 }
@@ -113,4 +115,5 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeW65816Target() {
   auto &PR = *PassRegistry::getPassRegistry();
   initializeW65816DAGToDAGISelLegacyPass(PR);
   initializeW65816ExpandPseudoPass(PR);
+  initializeW65816PeepholeOptPass(PR);
 }

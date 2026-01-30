@@ -25,9 +25,11 @@ class PassRegistry;
 FunctionPass *createW65816ISelDag(W65816TargetMachine &TM,
                                   CodeGenOptLevel OptLevel);
 FunctionPass *createW65816ExpandPseudoPass();
+FunctionPass *createW65816PeepholeOptPass();
 
 void initializeW65816DAGToDAGISelLegacyPass(PassRegistry &);
 void initializeW65816ExpandPseudoPass(PassRegistry &);
+void initializeW65816PeepholeOptPass(PassRegistry &);
 
 } // namespace llvm
 

@@ -22,6 +22,7 @@ add_llvm_target(W65816CodeGen
   W65816ISelDAGToDAG.cpp
   W65816ISelLowering.cpp
   W65816MCInstLower.cpp
+  W65816PeepholeOpt.cpp
   W65816RegisterInfo.cpp
   W65816Subtarget.cpp
   W65816TargetMachine.cpp
