@@ -7,13 +7,16 @@
 //===----------------------------------------------------------------------===//
 //
 // This file contains a pass that performs peephole optimizations on W65816
-// machine code. This includes eliminating redundant register transfers.
+// machine code. This includes:
 //
-// Patterns eliminated:
-// - TAX; TXA -> (delete both, value already in A)
-// - TXA; TAX -> (delete both, value already in X)
-// - TAY; TYA -> (delete both, value already in A)
-// - TYA; TAY -> (delete both, value already in Y)
+// 1. Eliminating redundant register transfers:
+//    - TAX; TXA -> (delete both, value already in A)
+//    - TXA; TAX -> (delete both, value already in X)
+//    - TAY; TYA -> (delete both, value already in A)
+//    - TYA; TAY -> (delete both, value already in Y)
+//
+// 2. Eliminating redundant branches:
+//    - BRA to fall-through block -> (delete, execution falls through anyway)
 //
 //===----------------------------------------------------------------------===//
 
@@ -46,6 +49,7 @@ public:
 private:
   bool optimizeMBB(MachineBasicBlock &MBB);
   bool isRedundantTransferPair(unsigned First, unsigned Second);
+  bool removeRedundantBranches(MachineFunction &MF);
 };
 
 char W65816PeepholeOpt::ID = 0;
@@ -98,12 +102,53 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
   return Modified;
 }
 
+/// Remove BRA instructions that branch to the fall-through block.
+/// These are redundant since execution would fall through anyway.
+bool W65816PeepholeOpt::removeRedundantBranches(MachineFunction &MF) {
+  bool Modified = false;
+
+  for (auto MBBI = MF.begin(), MBBE = MF.end(); MBBI != MBBE; ++MBBI) {
+    MachineBasicBlock &MBB = *MBBI;
+
+    // Get the next block in layout order
+    auto NextMBBI = std::next(MBBI);
+    if (NextMBBI == MBBE)
+      continue;
+
+    MachineBasicBlock *NextMBB = &*NextMBBI;
+
+    // Check if the last instruction is a BRA to the next block
+    if (MBB.empty())
+      continue;
+
+    MachineInstr &LastMI = MBB.back();
+    if (LastMI.getOpcode() != W65816::BRA)
+      continue;
+
+    // Check if the branch target is the next block
+    if (LastMI.getNumOperands() > 0 && LastMI.getOperand(0).isMBB()) {
+      MachineBasicBlock *TargetMBB = LastMI.getOperand(0).getMBB();
+      if (TargetMBB == NextMBB) {
+        LLVM_DEBUG(dbgs() << "Removing redundant BRA to fall-through block\n");
+        LastMI.eraseFromParent();
+        Modified = true;
+      }
+    }
+  }
+
+  return Modified;
+}
+
 bool W65816PeepholeOpt::runOnMachineFunction(MachineFunction &MF) {
   bool Modified = false;
 
+  // First pass: optimize within each basic block
   for (MachineBasicBlock &MBB : MF) {
     Modified |= optimizeMBB(MBB);
   }
+
+  // Second pass: remove redundant branches between blocks
+  Modified |= removeRedundantBranches(MF);
 
   return Modified;
 }
