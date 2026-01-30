@@ -482,41 +482,64 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
 
   // SUB16rr $dst, $src1, $src2
   // Similar to ADD but with SEC (set carry) and SBC
+  // Computes: dst = src1 - src2
 
   Register DstReg = MI.getOperand(0).getReg();
   Register Src1Reg = MI.getOperand(1).getReg();
   Register Src2Reg = MI.getOperand(2).getReg();
 
-  // First, ensure src1 is in A
-  if (Src1Reg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
-  } else if (Src1Reg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
-  }
-
-  // Set carry before subtraction (borrow = !carry)
-  buildMI(MBB, MBBI, W65816::SEC);
-
-  // Subtract src2 using Direct Page scratch location for faster access
-  if (Src2Reg == W65816::X) {
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
-        .addReg(W65816::X)
-        .addImm(SCRATCH_DP_ADDR);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
-        .addImm(SCRATCH_DP_ADDR);
-  } else if (Src2Reg == W65816::Y) {
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
-        .addReg(W65816::Y)
-        .addImm(SCRATCH_DP_ADDR);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
-        .addImm(SCRATCH_DP_ADDR);
-  } else if (Src2Reg == W65816::A) {
-    // Subtracting A from itself is always 0
+  // IMPORTANT: If src2 is in A and we need to move src1 to A,
+  // we must save src2 first before it gets overwritten!
+  if (Src2Reg == W65816::A && Src1Reg != W65816::A) {
+    // Save src2 (which is in A) to scratch before moving src1 to A
     BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
         .addImm(SCRATCH_DP_ADDR);
+
+    // Now move src1 to A
+    if (Src1Reg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+    } else if (Src1Reg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TYA);
+    }
+
+    // Set carry and subtract from scratch
+    buildMI(MBB, MBBI, W65816::SEC);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
+  } else {
+    // src2 is not in A, or src1 is already in A
+    // First, ensure src1 is in A
+    if (Src1Reg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+    } else if (Src1Reg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TYA);
+    }
+
+    // Set carry before subtraction (borrow = !carry)
+    buildMI(MBB, MBBI, W65816::SEC);
+
+    // Subtract src2 using Direct Page scratch location for faster access
+    if (Src2Reg == W65816::X) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+          .addReg(W65816::X)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::Y) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+          .addReg(W65816::Y)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::A) {
+      // src1 is also A (subtracting A from itself is always 0)
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    }
   }
 
   // Move result to destination if needed
