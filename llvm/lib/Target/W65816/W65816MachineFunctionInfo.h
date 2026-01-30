@@ -37,6 +37,16 @@ class W65816MachineFunctionInfo : public MachineFunctionInfo {
   /// FrameIndex for start of varargs area.
   int VarArgsFrameIndex = 0;
 
+  /// Whether this function uses Direct Page (DP) for local variable allocation.
+  /// When enabled, locals are allocated in the 256-byte direct page region
+  /// (addresses $00-$FF when D=0) instead of on the stack. This allows using
+  /// faster 2-byte DP instructions instead of 2-byte stack-relative instructions.
+  /// Enabled via the "w65816_dpframe" function attribute.
+  bool UsesDPFrame = false;
+
+  /// Size of locals allocated in Direct Page (must be <= 256 bytes).
+  unsigned DPFrameSize = 0;
+
 public:
   W65816MachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI) {
     // Check for interrupt handler attribute
@@ -54,6 +64,10 @@ public:
         }
       }
     }
+
+    // Check for Direct Page frame attribute
+    // Usage: __attribute__((annotate("w65816_dpframe"))) or via IR attribute
+    UsesDPFrame = F.hasFnAttribute("w65816_dpframe");
   }
 
   MachineFunctionInfo *
@@ -76,6 +90,15 @@ public:
 
   int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
   void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
+
+  /// Returns true if this function uses Direct Page for local allocation.
+  bool usesDPFrame() const { return UsesDPFrame; }
+
+  /// Get the size of locals allocated in Direct Page.
+  unsigned getDPFrameSize() const { return DPFrameSize; }
+
+  /// Set the size of locals allocated in Direct Page.
+  void setDPFrameSize(unsigned Size) { DPFrameSize = Size; }
 };
 
 } // end namespace llvm

@@ -58,6 +58,25 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
   while (MBBI != MBB.end() && MBBI->isDebugInstr())
     ++MBBI;
 
+  // Handle Direct Page frame functions
+  // These use the 256-byte direct page region instead of the stack for locals
+  if (AFI->usesDPFrame()) {
+    // If assume-d0 is set, D register is guaranteed to be 0, skip setup
+    if (!STI.assumeD0()) {
+      // Save D register (callee-saved requirement)
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::PHD))
+          .setMIFlag(MachineInstr::FrameSetup);
+      // Set D to 0 (DP base at $0000)
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::LDA_imm16), W65816::A)
+          .addImm(0)
+          .setMIFlag(MachineInstr::FrameSetup);
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::TCD))
+          .setMIFlag(MachineInstr::FrameSetup);
+    }
+    // DP frame functions don't use stack allocation for locals
+    return;
+  }
+
   // For interrupt handlers, save all registers first
   // The 65816 interrupt sequence automatically pushes P and PC,
   // but we need to save A, X, Y ourselves
@@ -155,6 +174,16 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
 
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
+
+  // Handle Direct Page frame functions - restore D register
+  if (AFI->usesDPFrame()) {
+    // If assume-d0 is set, D register was never modified, skip restore
+    if (!STI.assumeD0()) {
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::PLD))
+          .setMIFlag(MachineInstr::FrameDestroy);
+    }
+    return;
+  }
 
   uint64_t StackSize = MFI.getStackSize();
 
@@ -295,4 +324,10 @@ void W65816FrameLowering::determineCalleeSaves(MachineFunction &MF,
 
   // D register is callee-saved if used
   // This will be determined by the register allocator
+}
+
+void W65816FrameLowering::processFunctionBeforeFrameFinalized(
+    MachineFunction &MF, RegScavenger *RS) const {
+  // Note: DP frame size validation is done in W65816RegisterInfo::eliminateFrameIndex
+  // because the final frame object offsets are only known at that point.
 }

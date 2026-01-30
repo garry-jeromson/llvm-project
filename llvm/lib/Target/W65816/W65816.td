@@ -36,6 +36,12 @@ def FeatureIdx8Bit
     : SubtargetFeature<"idx8bit", "UseIdx8Bit", "true",
                        "Use 8-bit index registers (X=1)">;
 
+// Assume D register is always 0 (skip D register save/restore in DP frame functions)
+// This is an optimization for code that maintains D=0 throughout execution
+def FeatureAssumeD0
+    : SubtargetFeature<"assume-d0", "AssumeD0", "true",
+                       "Assume D register is always 0 (skip DP prologue/epilogue)">;
+
 //===----------------------------------------------------------------------===//
 // W65816 Processors
 //===----------------------------------------------------------------------===//
