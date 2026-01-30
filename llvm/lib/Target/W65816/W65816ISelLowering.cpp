@@ -63,6 +63,8 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
 
   // Always add GPR16 for 16-bit operations (needed for pointers at minimum)
   addRegisterClass(MVT::i16, &W65816::GPR16RegClass);
+  // Note: GPR8 is NOT registered as a legal type in 16-bit mode
+  // All i8 operations get promoted to i16 by the type legalizer
 
   // Compute derived properties from the register classes
   computeRegisterProperties(STI.getRegisterInfo());
@@ -109,24 +111,26 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i1, Expand);
 
   // Branch operations
-  setOperationAction(ISD::BR_CC, MVT::i8, Custom);
+  // i8 operands get promoted to i16, then our i16 Custom handler runs
+  setOperationAction(ISD::BR_CC, MVT::i8, Promote);
   setOperationAction(ISD::BR_CC, MVT::i16, Custom);
   // BRCOND: br i1 %cond - branch on boolean value
   // We handle this by converting to our BRCOND node that checks if value is non-zero
   setOperationAction(ISD::BRCOND, MVT::Other, Custom);
 
   // Select operations
-  setOperationAction(ISD::SELECT, MVT::i8, Expand);
+  // i8 operands get promoted to i16, then our i16 Custom handler runs
+  setOperationAction(ISD::SELECT, MVT::i8, Promote);
   setOperationAction(ISD::SELECT, MVT::i16, Expand);
-  setOperationAction(ISD::SELECT_CC, MVT::i8, Custom);
+  setOperationAction(ISD::SELECT_CC, MVT::i8, Promote);
   setOperationAction(ISD::SELECT_CC, MVT::i16, Custom);
 
   // Global addresses need custom lowering
   setOperationAction(ISD::GlobalAddress, MVT::i16, Custom);
 
-  // Set condition code actions - use Custom to return i16 (0 or 1)
-  // This is needed so that `br i1` and `select i1` work properly
-  setOperationAction(ISD::SETCC, MVT::i8, Custom);
+  // Set condition code actions
+  // i8 operands get promoted to i16, then our i16 Custom handler runs
+  setOperationAction(ISD::SETCC, MVT::i8, Promote);
   setOperationAction(ISD::SETCC, MVT::i16, Custom);
 
   // Count leading/trailing zeros - expand (no hardware support)
@@ -327,6 +331,36 @@ static unsigned getBranchOpcodeForCond(W65816CC::CondCode CC) {
   llvm_unreachable("Unknown condition code");
 }
 
+// Helper to evaluate an integer comparison at compile time
+static bool evaluateICmp(ISD::CondCode CC, int64_t LHS, int64_t RHS) {
+  switch (CC) {
+  case ISD::SETEQ:
+  case ISD::SETUEQ:
+    return LHS == RHS;
+  case ISD::SETNE:
+  case ISD::SETUNE:
+    return LHS != RHS;
+  case ISD::SETLT:
+    return LHS < RHS;
+  case ISD::SETLE:
+    return LHS <= RHS;
+  case ISD::SETGT:
+    return LHS > RHS;
+  case ISD::SETGE:
+    return LHS >= RHS;
+  case ISD::SETULT:
+    return (uint64_t)LHS < (uint64_t)RHS;
+  case ISD::SETULE:
+    return (uint64_t)LHS <= (uint64_t)RHS;
+  case ISD::SETUGT:
+    return (uint64_t)LHS > (uint64_t)RHS;
+  case ISD::SETUGE:
+    return (uint64_t)LHS >= (uint64_t)RHS;
+  default:
+    llvm_unreachable("Unknown condition code");
+  }
+}
+
 SDValue W65816TargetLowering::LowerSELECT_CC(SDValue Op,
                                              SelectionDAG &DAG) const {
   SDLoc DL(Op);
@@ -335,6 +369,18 @@ SDValue W65816TargetLowering::LowerSELECT_CC(SDValue Op,
   SDValue TrueVal = Op.getOperand(2);
   SDValue FalseVal = Op.getOperand(3);
   ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(4))->get();
+
+  // Constant fold: if both comparison operands are constant, evaluate now
+  // This avoids infinite loops in instruction selection when trying to
+  // materialize constants into registers for comparisons like `icmp eq i16 1, 1`
+  if (auto *CLHS = dyn_cast<ConstantSDNode>(LHS)) {
+    if (auto *CRHS = dyn_cast<ConstantSDNode>(RHS)) {
+      bool Result = evaluateICmp(CC, CLHS->getSExtValue(), CRHS->getSExtValue());
+      return Result ? TrueVal : FalseVal;
+    }
+  }
+
+  // Operands should already be i16 after type legalization
 
   // Create a comparison that sets the processor flags
   // CMP subtracts RHS from LHS and sets flags
@@ -355,6 +401,18 @@ SDValue W65816TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   SDValue LHS = Op.getOperand(0);
   SDValue RHS = Op.getOperand(1);
   ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(2))->get();
+  EVT ResultVT = Op.getValueType();
+
+  // Constant fold: if both comparison operands are constant, evaluate now
+  if (auto *CLHS = dyn_cast<ConstantSDNode>(LHS)) {
+    if (auto *CRHS = dyn_cast<ConstantSDNode>(RHS)) {
+      bool Result = evaluateICmp(CC, CLHS->getSExtValue(), CRHS->getSExtValue());
+      return DAG.getConstant(Result ? 1 : 0, DL, ResultVT);
+    }
+  }
+
+  // Operands should already be i16 after type legalization
+  // (i8 operands get promoted to i16 automatically)
 
   // Create a comparison node that sets flags
   SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, LHS, RHS);
@@ -370,7 +428,14 @@ SDValue W65816TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   SDVTList VTs = DAG.getVTList(MVT::i16, MVT::Glue);
   SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16), Cmp};
 
-  return DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
+  SDValue Result = DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
+
+  // Truncate result to the expected type if needed (e.g., i8 or i1)
+  if (ResultVT != MVT::i16) {
+    Result = DAG.getNode(ISD::TRUNCATE, DL, ResultVT, Result);
+  }
+
+  return Result;
 }
 
 SDValue W65816TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
@@ -380,6 +445,8 @@ SDValue W65816TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
   SDValue LHS = Op.getOperand(2);
   SDValue RHS = Op.getOperand(3);
   SDValue Dest = Op.getOperand(4);
+
+  // Operands should already be i16 after type legalization
 
   // Create a comparison node that sets flags
   SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, LHS, RHS);
@@ -613,15 +680,22 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   //     cmp ...        (already done before Select16)
   //     bCC trueMBB
   //     jmp falseMBB
-  //   falseMBB:
-  //     ... (falseVal)
-  //     jmp sinkMBB
   //   trueMBB:
-  //     ... (trueVal)
+  //     copy trueVal   (value materialized here, in correct control flow path)
+  //     jmp sinkMBB
+  //   falseMBB:
+  //     copy falseVal  (value materialized here, in correct control flow path)
+  //     jmp sinkMBB
   //   sinkMBB:
   //     phi result
+  //
+  // The key fix: TrueReg and FalseReg may have been materialized BEFORE the
+  // branch (e.g., `lda #42` happens before `cmp`). By inserting COPY instructions
+  // inside TrueMBB and FalseMBB, we ensure the register allocator places the
+  // value-producing code in the correct control flow path.
 
   MachineFunction *MF = MBB->getParent();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
   const BasicBlock *BB = MBB->getBasicBlock();
   MachineFunction::iterator It = ++MBB->getIterator();
 
@@ -648,18 +722,26 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   BuildMI(MBB, DL, TII.get(BranchOpc)).addMBB(TrueMBB);
   BuildMI(MBB, DL, TII.get(W65816::BRA)).addMBB(FalseMBB);
 
-  // TrueMBB just falls through to SinkMBB
-  TrueMBB->addSuccessor(SinkMBB);
+  // Create new virtual registers for the values in each block
+  // This ensures the value copies happen in the correct control flow path
+  Register TrueResult = MRI.createVirtualRegister(&W65816::GPR16RegClass);
+  Register FalseResult = MRI.createVirtualRegister(&W65816::GPR16RegClass);
 
-  // FalseMBB branches to SinkMBB
+  // TrueMBB: copy TrueReg to TrueResult, then fall through to SinkMBB
+  TrueMBB->addSuccessor(SinkMBB);
+  BuildMI(TrueMBB, DL, TII.get(TargetOpcode::COPY), TrueResult).addReg(TrueReg);
+  BuildMI(TrueMBB, DL, TII.get(W65816::BRA)).addMBB(SinkMBB);
+
+  // FalseMBB: copy FalseReg to FalseResult, then branch to SinkMBB
   FalseMBB->addSuccessor(SinkMBB);
+  BuildMI(FalseMBB, DL, TII.get(TargetOpcode::COPY), FalseResult).addReg(FalseReg);
   BuildMI(FalseMBB, DL, TII.get(W65816::BRA)).addMBB(SinkMBB);
 
-  // SinkMBB has the PHI node
+  // SinkMBB has the PHI node using the block-local copies
   BuildMI(*SinkMBB, SinkMBB->begin(), DL, TII.get(TargetOpcode::PHI), DstReg)
-      .addReg(TrueReg)
+      .addReg(TrueResult)
       .addMBB(TrueMBB)
-      .addReg(FalseReg)
+      .addReg(FalseResult)
       .addMBB(FalseMBB);
 
   MI.eraseFromParent();
@@ -955,4 +1037,194 @@ SDValue W65816TargetLowering::LowerVASTART(SDValue Op,
   // Store the frame index to the va_list pointer
   // This is the address where the first vararg is located
   return DAG.getStore(Chain, DL, FrameIndex, Ptr, MachinePointerInfo(SV));
+}
+
+SDValue W65816TargetLowering::LowerSIGN_EXTEND(SDValue Op,
+                                                SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Val = Op.getOperand(0);
+  EVT SrcVT = Val.getValueType();
+  EVT DstVT = Op.getValueType();
+
+  // Only handle i8 to i16 sign extension
+  if (SrcVT != MVT::i8 || DstVT != MVT::i16) {
+    // For other cases, let the legalizer handle it
+    return SDValue();
+  }
+
+  // Sign extend i8 to i16 using: ((x & 0xFF) << 8) >> 8 (arithmetic shift)
+  // First zero-extend, then shift-based sign extension
+  SDValue ZExt = LowerZERO_EXTEND(
+      DAG.getNode(ISD::ZERO_EXTEND, DL, MVT::i16, Val), DAG);
+  // Shift left by 8 to put the i8 value in the high byte
+  SDValue ShiftAmt = DAG.getConstant(8, DL, MVT::i16);
+  SDValue Shifted = DAG.getNode(ISD::SHL, DL, MVT::i16, ZExt, ShiftAmt);
+  // Arithmetic shift right by 8 to sign-extend
+  SDValue Result = DAG.getNode(ISD::SRA, DL, MVT::i16, Shifted, ShiftAmt);
+  return Result;
+}
+
+SDValue W65816TargetLowering::LowerZERO_EXTEND(SDValue Op,
+                                                SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Val = Op.getOperand(0);
+  EVT SrcVT = Val.getValueType();
+  EVT DstVT = Op.getValueType();
+
+  // Only handle i8 to i16 zero extension
+  if (SrcVT != MVT::i8 || DstVT != MVT::i16) {
+    // For other cases, let the legalizer handle it
+    return SDValue();
+  }
+
+  // Zero extend i8 to i16: the i8 value is in the low byte of a 16-bit register
+  // Just AND with 0xFF to clear the high byte
+  // The register allocator will coalesce the 8-bit and 16-bit registers
+  return DAG.getNode(ISD::AND, DL, MVT::i16,
+                      DAG.getNode(ISD::BITCAST, DL, MVT::i16, Val),
+                      DAG.getConstant(0xFF, DL, MVT::i16));
+}
+
+// Helper to promote i8 comparison operands to i16
+// Returns true if promotion was needed, false if operands are already i16
+static bool promoteCompareOperands(SelectionDAG &DAG,
+                                   const SDLoc &DL,
+                                   SDValue LHS,
+                                   SDValue RHS,
+                                   ISD::CondCode CC,
+                                   SDValue &PromotedLHS,
+                                   SDValue &PromotedRHS) {
+  // If operands are already i16, no promotion needed
+  if (LHS.getValueType() == MVT::i16) {
+    PromotedLHS = LHS;
+    PromotedRHS = RHS;
+    return false;
+  }
+
+  // Use sign-extend for signed comparisons, zero-extend for unsigned
+  bool IsSigned = ISD::isSignedIntSetCC(CC);
+
+  if (IsSigned) {
+    // Sign extend i8 to i16: shift left 8, then arithmetic shift right 8
+    // This avoids creating SIGN_EXTEND nodes during type legalization
+    SDValue Eight = DAG.getConstant(8, DL, MVT::i16);
+    PromotedLHS = DAG.getNode(ISD::SHL, DL, MVT::i16,
+                               DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, LHS), Eight);
+    PromotedLHS = DAG.getNode(ISD::SRA, DL, MVT::i16, PromotedLHS, Eight);
+    PromotedRHS = DAG.getNode(ISD::SHL, DL, MVT::i16,
+                               DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, RHS), Eight);
+    PromotedRHS = DAG.getNode(ISD::SRA, DL, MVT::i16, PromotedRHS, Eight);
+  } else {
+    // Zero extend: AND with 0xFF
+    SDValue Mask = DAG.getConstant(0xFF, DL, MVT::i16);
+    PromotedLHS = DAG.getNode(ISD::AND, DL, MVT::i16,
+                               DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, LHS), Mask);
+    PromotedRHS = DAG.getNode(ISD::AND, DL, MVT::i16,
+                               DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, RHS), Mask);
+  }
+  return true;
+}
+
+void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
+                                               SmallVectorImpl<SDValue> &Results,
+                                               SelectionDAG &DAG) const {
+  SDLoc DL(N);
+
+  switch (N->getOpcode()) {
+  case ISD::SETCC: {
+    // Handle i8 SETCC by promoting operands to i16 and lowering directly
+    // to our custom SELECT_CC (same as LowerSETCC but with promoted operands)
+    SDValue LHS = N->getOperand(0);
+    SDValue RHS = N->getOperand(1);
+    ISD::CondCode CC = cast<CondCodeSDNode>(N->getOperand(2))->get();
+
+    // Only handle if operands need promotion (are i8)
+    if (LHS.getValueType() != MVT::i8)
+      break;
+
+    SDValue PromotedLHS, PromotedRHS;
+    promoteCompareOperands(DAG, DL, LHS, RHS, CC, PromotedLHS, PromotedRHS);
+
+    // Create a comparison node that sets flags (using promoted i16 operands)
+    SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
+
+    // Get the W65816 condition code for this ISD condition
+    W65816CC::CondCode W65CC = getCondCodeForISD(CC);
+
+    // SETCC returns 1 if true, 0 if false
+    SDValue TrueVal = DAG.getConstant(1, DL, MVT::i16);
+    SDValue FalseVal = DAG.getConstant(0, DL, MVT::i16);
+
+    SDVTList VTs = DAG.getVTList(MVT::i16, MVT::Glue);
+    SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16), Cmp};
+
+    SDValue Result = DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
+
+    // Truncate result to the expected type if needed
+    if (N->getValueType(0) != MVT::i16) {
+      Result = DAG.getNode(ISD::TRUNCATE, DL, N->getValueType(0), Result);
+    }
+    Results.push_back(Result);
+    return;
+  }
+  case ISD::BR_CC: {
+    // Handle i8 BR_CC by promoting comparison operands to i16
+    SDValue Chain = N->getOperand(0);
+    ISD::CondCode CC = cast<CondCodeSDNode>(N->getOperand(1))->get();
+    SDValue LHS = N->getOperand(2);
+    SDValue RHS = N->getOperand(3);
+    SDValue Dest = N->getOperand(4);
+
+    // Only handle if operands need promotion (are i8)
+    if (LHS.getValueType() != MVT::i8)
+      break;
+
+    SDValue PromotedLHS, PromotedRHS;
+    promoteCompareOperands(DAG, DL, LHS, RHS, CC, PromotedLHS, PromotedRHS);
+
+    // Create comparison and branch using our custom nodes
+    SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
+    W65816CC::CondCode W65CC = getCondCodeForISD(CC);
+    SDValue BrCond = DAG.getNode(W65816ISD::BRCOND, DL, MVT::Other,
+                                  Chain, Dest,
+                                  DAG.getConstant(W65CC, DL, MVT::i16), Cmp);
+    Results.push_back(BrCond);
+    return;
+  }
+  case ISD::SELECT_CC: {
+    // Handle i8 SELECT_CC by promoting comparison operands to i16
+    SDValue LHS = N->getOperand(0);
+    SDValue RHS = N->getOperand(1);
+    SDValue TrueV = N->getOperand(2);
+    SDValue FalseV = N->getOperand(3);
+    ISD::CondCode CC = cast<CondCodeSDNode>(N->getOperand(4))->get();
+
+    // Only handle if operands need promotion (are i8)
+    if (LHS.getValueType() != MVT::i8)
+      break;
+
+    SDValue PromotedLHS, PromotedRHS;
+    promoteCompareOperands(DAG, DL, LHS, RHS, CC, PromotedLHS, PromotedRHS);
+
+    // Create comparison and select using our custom nodes
+    SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
+    W65816CC::CondCode W65CC = getCondCodeForISD(CC);
+
+    SDVTList VTs = DAG.getVTList(N->getValueType(0), MVT::Glue);
+    SDValue Ops[] = {TrueV, FalseV, DAG.getConstant(W65CC, DL, MVT::i16), Cmp};
+
+    SDValue Result = DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
+    Results.push_back(Result);
+    return;
+  }
+  default:
+    break;
+  }
+
+  // Default: try LowerOperation
+  SDValue Res = LowerOperation(SDValue(N, 0), DAG);
+  if (Res.getNode()) {
+    for (unsigned I = 0, E = Res->getNumValues(); I != E; ++I)
+      Results.push_back(Res.getValue(I));
+  }
 }

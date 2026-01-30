@@ -54,6 +54,9 @@ public:
 
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
 
+  void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue> &Results,
+                          SelectionDAG &DAG) const override;
+
   MachineBasicBlock *
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *MBB) const override;
@@ -73,7 +76,10 @@ public:
 
   EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
                          EVT VT) const override {
-    return MVT::i8;
+    // Return i16 since that's our smallest legal integer type in 16-bit mode
+    // Returning i8 would cause an infinite loop during type legalization
+    // because i8 is not a legal type
+    return MVT::i16;
   }
 
 private:
@@ -107,6 +113,8 @@ private:
   SDValue LowerLoad(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerStore(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerSIGN_EXTEND(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerZERO_EXTEND(SDValue Op, SelectionDAG &DAG) const;
 };
 
 } // namespace llvm

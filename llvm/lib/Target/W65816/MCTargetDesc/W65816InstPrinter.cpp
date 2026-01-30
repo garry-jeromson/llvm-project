@@ -60,6 +60,23 @@ void W65816InstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
   }
 }
 
+// Print 16-bit immediate as unsigned value
+// This ensures negative numbers are printed as unsigned to avoid assembler issues
+void W65816InstPrinter::printImm16(const MCInst *MI, unsigned OpNo,
+                                   raw_ostream &OS) {
+  const MCOperand &Op = MI->getOperand(OpNo);
+
+  if (Op.isImm()) {
+    // Mask to 16 bits to ensure unsigned output
+    uint16_t Val = Op.getImm() & 0xFFFF;
+    OS << Val;
+  } else if (Op.isExpr()) {
+    MAI.printExpr(OS, *Op.getExpr());
+  } else {
+    OS << "<unknown>";
+  }
+}
+
 void W65816InstPrinter::printAddrModeMemSrc(const MCInst *MI, unsigned OpNo,
                                             raw_ostream &OS) {
   const MCOperand &Op = MI->getOperand(OpNo);

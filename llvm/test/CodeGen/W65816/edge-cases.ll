@@ -56,7 +56,7 @@ define i16 @shift_zero(i16 %a) {
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: load_max:
-; CHECK: lda #-1
+; CHECK: lda #65535
 ; CHECK: rts
 define i16 @load_max() {
   ret i16 65535
@@ -70,7 +70,7 @@ define i16 @and_max(i16 %a) {
 }
 
 ; CHECK-LABEL: or_max:
-; CHECK: lda #-1
+; CHECK: lda #65535
 ; CHECK: rts
 define i16 @or_max(i16 %a) {
   %r = or i16 %a, 65535
@@ -78,7 +78,7 @@ define i16 @or_max(i16 %a) {
 }
 
 ; CHECK-LABEL: xor_max:
-; CHECK: eor #-1
+; CHECK: eor #65535
 ; CHECK: rts
 define i16 @xor_max(i16 %a) {
   %r = xor i16 %a, 65535
@@ -187,7 +187,7 @@ define void @void_store_global(i16 %v) {
 ; CHECK-LABEL: add_overflow:
 ; 0x8000 + 0x8000 = 0x10000 wraps to 0x0000
 ; CHECK: clc
-; CHECK: adc #-32768
+; CHECK: adc #32768
 ; CHECK: rts
 define i16 @add_overflow(i16 %a) {
   %r = add i16 %a, 32768

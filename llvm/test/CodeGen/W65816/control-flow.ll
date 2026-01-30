@@ -81,7 +81,7 @@ define i16 @return_arg(i16 %a) {
 }
 
 ; CHECK-LABEL: return_max:
-; CHECK: lda #-1
+; CHECK: lda #65535
 ; CHECK: rts
 define i16 @return_max() {
   ret i16 65535

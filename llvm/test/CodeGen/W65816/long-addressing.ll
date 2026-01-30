@@ -116,9 +116,13 @@ define i16 @test_rom_load_var(i16 %idx) {
 
 ; Test storing to far array with variable index
 ; Uses long indexed addressing (STA_longX, opcode 0x9F)
+; Note: Args are A=idx, X=val. After shift, A=idx*2, X=val.
+; We need A=val, X=idx*2 for the store, so swap is required.
 ; CHECK-LABEL: test_far_store_var:
 ; CHECK: asl a
-; CHECK: tax
+; CHECK: pha
+; CHECK: txa
+; CHECK: plx
 ; CHECK: sta far_array,x
 @far_array = global [8 x i16] zeroinitializer, section ".fardata"
 

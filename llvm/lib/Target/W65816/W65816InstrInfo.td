@@ -122,8 +122,10 @@ def imm8 : Operand<i8> {
 }
 
 // 16-bit immediate operand
+// Uses printImm16 to ensure negative values are printed as unsigned
 def imm16 : Operand<i16> {
   let ParserMatchClass = Imm16AsmOperand;
+  let PrintMethod = "printImm16";
 }
 
 // 24-bit long address operand (stored in i32, high 8 bits ignored)
@@ -1731,34 +1733,35 @@ let isBranch = 1, isTerminator = 1, Uses = [P] in {
 //===----------------------------------------------------------------------===//
 
 // Shift left by immediate amount - expands to multiple ASL instructions
-// Note: All shifts use A internally, so they clobber A even if dst/src is X/Y
+// Output is ACC16 because all shift operations use the accumulator on W65816.
+// If the result needs to be in X or Y, the register allocator will insert COPY.
 // Note: Shift amounts are i16 (getScalarShiftAmountTy returns i16 since i8 isn't legal)
-let Defs = [A, P] in {
-  def SHL16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$amt),
+let Defs = [P] in {
+  def SHL16ri : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, imm16:$amt),
                        "# SHL16ri $dst, $src, $amt",
-                       [(set GPR16:$dst, (shl GPR16:$src, (i16 imm:$amt)))]>;
+                       [(set ACC16:$dst, (shl GPR16:$src, (i16 imm:$amt)))]>;
 
-  def SRL16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$amt),
+  def SRL16ri : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, imm16:$amt),
                        "# SRL16ri $dst, $src, $amt",
-                       [(set GPR16:$dst, (srl GPR16:$src, (i16 imm:$amt)))]>;
+                       [(set ACC16:$dst, (srl GPR16:$src, (i16 imm:$amt)))]>;
 
-  def SRA16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$amt),
+  def SRA16ri : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, imm16:$amt),
                        "# SRA16ri $dst, $src, $amt",
-                       [(set GPR16:$dst, (sra GPR16:$src, (i16 imm:$amt)))]>;
+                       [(set ACC16:$dst, (sra GPR16:$src, (i16 imm:$amt)))]>;
 
   // Variable amount shifts - expand to loops
   // Shift amount is i16 (promoted from i8)
-  def SHL16rv : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, GPR16:$amt),
+  def SHL16rv : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, GPR16:$amt),
                        "# SHL16rv $dst, $src, $amt",
-                       [(set GPR16:$dst, (shl GPR16:$src, GPR16:$amt))]>;
+                       [(set ACC16:$dst, (shl GPR16:$src, GPR16:$amt))]>;
 
-  def SRL16rv : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, GPR16:$amt),
+  def SRL16rv : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, GPR16:$amt),
                        "# SRL16rv $dst, $src, $amt",
-                       [(set GPR16:$dst, (srl GPR16:$src, GPR16:$amt))]>;
+                       [(set ACC16:$dst, (srl GPR16:$src, GPR16:$amt))]>;
 
-  def SRA16rv : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, GPR16:$amt),
+  def SRA16rv : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, GPR16:$amt),
                        "# SRA16rv $dst, $src, $amt",
-                       [(set GPR16:$dst, (sra GPR16:$src, GPR16:$amt))]>;
+                       [(set ACC16:$dst, (sra GPR16:$src, GPR16:$amt))]>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1988,6 +1991,25 @@ let Defs = [Y, P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
   def LDA8indirectIdx : Pseudo<(outs ACC16:$dst),
                                (ins i32imm:$stack_slot, GPR16:$ptr, GPR16:$idx),
                                "# LDA8indirectIdx $dst, [$stack_slot], $ptr, $idx", []>;
+}
+
+// LDA8indexedX - Load 8-bit value from global array with variable index
+// For: array[i] where array is a global and i is in a register
+// Operands: (dst, addr, idx) where addr is global address, idx is byte offset
+// Expands to: move idx to X, SEP #$20, LDA addr,X, REP #$20, AND #$00FF
+// Note: Output is GPR16 to allow register allocator flexibility
+let Defs = [X, P], mayLoad = 1, hasSideEffects = 0 in {
+  def LDA8indexedX : Pseudo<(outs GPR16:$dst), (ins addr16:$addr, GPR16:$idx),
+                            "# LDA8indexedX $dst, $addr, $idx", []>;
+}
+
+// STA8indexedX - Store 8-bit value to global array with variable index
+// For: array[i] = val where array is a global and i is in a register
+// Operands: (src, addr, idx) where src is value, addr is global, idx is byte offset
+// Expands to: move idx to X, move src to A, SEP #$20, STA addr,X, REP #$20
+let Defs = [A, X, P], mayStore = 1, hasSideEffects = 0 in {
+  def STA8indexedX : Pseudo<(outs), (ins GPR16:$src, addr16:$addr, GPR16:$idx),
+                            "# STA8indexedX $src, $addr, $idx", []>;
 }
 
 // STA8indirectIdx - Store 8-bit value through pointer+index with mode switching

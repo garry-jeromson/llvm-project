@@ -114,14 +114,14 @@ define i16 @load_immediate_large() {
 
 ; CHECK-LABEL: load_immediate_max:
 ; -1 in two's complement = 65535
-; CHECK: lda #-1
+; CHECK: lda #65535
 ; CHECK: rts
 define i16 @load_immediate_max() {
   ret i16 65535
 }
 
 ; CHECK-LABEL: load_immediate_neg:
-; CHECK: lda #-100
+; CHECK: lda #65436
 ; CHECK: rts
 define i16 @load_immediate_neg() {
   ret i16 65436  ; -100 in two's complement

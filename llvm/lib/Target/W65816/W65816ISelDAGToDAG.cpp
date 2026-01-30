@@ -141,7 +141,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
 
       // Check if source is an immediate
       if (ConstantSDNode *Imm = dyn_cast<ConstantSDNode>(Src)) {
-        int64_t Val = Imm->getSExtValue();
+        // Use getZExtValue and mask to 16 bits to handle negative values
+        uint64_t Val = Imm->getZExtValue() & 0xFFFF;
         unsigned LoadOpc = 0;
 
         if (Reg == W65816::X) {
@@ -597,8 +598,22 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
+      // Check for store to constant address (from inttoptr)
+      // This handles volatile stores like: store volatile i8 %v, ptr inttoptr (i16 8469 to ptr)
+      // Use direct absolute addressing instead of indirect
+      if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr)) {
+        uint64_t ConstAddr = CN->getZExtValue() & 0xFFFF;
+        SDValue TargetAddr = CurDAG->getTargetConstant(ConstAddr, DL, MVT::i16);
+        SDValue Ops[] = {Value, TargetAddr, Chain};
+        MachineSDNode *Store =
+            CurDAG->getMachineNode(W65816::STA_abs, DL, MVT::Other, Ops);
+        CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+        ReplaceNode(N, Store);
+        return;
+      }
+
       // Check for store through a pointer in a register (e.g., *ptr = val)
-      // If Addr is not a frame index, wrapper, or add pattern, it's a register
+      // If Addr is not a frame index, wrapper, add pattern, or constant, it's a register
       // We need to use stack-relative indirect addressing:
       // 1. Store the pointer to a stack slot
       // 2. Use STA (offset,S),Y with Y=0 to store through it
@@ -629,8 +644,54 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     // These need mode switching: SEP #$20, store, REP #$20
     if (ST->getMemoryVT() == MVT::i8 && ST->isTruncatingStore()) {
 
+      // Check for indexed GLOBAL access: (store i8, (add (wrapper GA), index))
+      // This handles global_array[i] = val for byte arrays
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check for (add (wrapper GA), index) pattern
+        SDValue Base;
+        SDValue Index;
+        if (LHS.getOpcode() == W65816ISD::WRAPPER) {
+          Base = LHS.getOperand(0);
+          Index = RHS;
+        } else if (RHS.getOpcode() == W65816ISD::WRAPPER) {
+          Base = RHS.getOperand(0);
+          Index = LHS;
+        }
+
+        if (Base.getNode() && Index.getNode()) {
+          if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Base)) {
+            // Check if index is a constant - can fold into address
+            if (ConstantSDNode *CI = dyn_cast<ConstantSDNode>(Index)) {
+              int64_t Offset = GA->getOffset() + CI->getSExtValue();
+              // Use STA8_abs with folded offset
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i16, Offset);
+              SDValue Ops[] = {Value, TargetAddr, Chain};
+              MachineSDNode *Store =
+                  CurDAG->getMachineNode(W65816::STA8_abs, DL, MVT::Other, Ops);
+              CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+              ReplaceNode(N, Store);
+              return;
+            }
+
+            // Variable index - use STA8indexedX pseudo
+            SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                GA->getGlobal(), DL, MVT::i16, GA->getOffset());
+            SDValue Ops[] = {Value, TargetAddr, Index, Chain};
+            MachineSDNode *Store =
+                CurDAG->getMachineNode(W65816::STA8indexedX, DL, MVT::Other, Ops);
+            CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+            ReplaceNode(N, Store);
+            return;
+          }
+        }
+      }
+
       // Check for indexed pointer access: (store i8, (add ptr, offset))
-      // This handles ptr[i] = val for byte arrays
+      // This handles ptr[i] = val for byte arrays where ptr is in a register
       if (Addr.getOpcode() == ISD::ADD) {
         SDValue LHS = Addr.getOperand(0);
         SDValue RHS = Addr.getOperand(1);
@@ -657,6 +718,19 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           ReplaceNode(N, Store);
           return;
         }
+      }
+
+      // Check for 8-bit store to constant address (from inttoptr)
+      // This handles volatile stores like: store volatile i8 %v, ptr inttoptr (i16 8469 to ptr)
+      if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr)) {
+        uint64_t ConstAddr = CN->getZExtValue() & 0xFFFF;
+        SDValue TargetAddr = CurDAG->getTargetConstant(ConstAddr, DL, MVT::i16);
+        SDValue Ops[] = {Value, TargetAddr, Chain};
+        MachineSDNode *Store =
+            CurDAG->getMachineNode(W65816::STA8_abs, DL, MVT::Other, Ops);
+        CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+        ReplaceNode(N, Store);
+        return;
       }
 
       // Check for simple pointer dereference through register
@@ -1001,8 +1075,56 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     if (LD->getMemoryVT() == MVT::i8 &&
         LD->getExtensionType() != ISD::NON_EXTLOAD) {
 
+      // Check for indexed GLOBAL access: (load i8, (add (wrapper GA), index))
+      // This handles global_array[i] for byte arrays
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check for (add (wrapper GA), index) pattern
+        SDValue Base;
+        SDValue Index;
+        if (LHS.getOpcode() == W65816ISD::WRAPPER) {
+          Base = LHS.getOperand(0);
+          Index = RHS;
+        } else if (RHS.getOpcode() == W65816ISD::WRAPPER) {
+          Base = RHS.getOperand(0);
+          Index = LHS;
+        }
+
+        if (Base.getNode() && Index.getNode()) {
+          if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Base)) {
+            // Check if index is a constant - can fold into address
+            if (ConstantSDNode *CI = dyn_cast<ConstantSDNode>(Index)) {
+              int64_t Offset = GA->getOffset() + CI->getSExtValue();
+              // Use LDA8_abs with folded offset
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i16, Offset);
+              SDValue Ops[] = {TargetAddr, Chain};
+              SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+              MachineSDNode *Load =
+                  CurDAG->getMachineNode(W65816::LDA8_abs, DL, VTs, Ops);
+              CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+              ReplaceNode(N, Load);
+              return;
+            }
+
+            // Variable index - use LDA8indexedX pseudo
+            SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                GA->getGlobal(), DL, MVT::i16, GA->getOffset());
+            SDValue Ops[] = {TargetAddr, Index, Chain};
+            SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+            MachineSDNode *Load =
+                CurDAG->getMachineNode(W65816::LDA8indexedX, DL, VTs, Ops);
+            CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+            ReplaceNode(N, Load);
+            return;
+          }
+        }
+      }
+
       // Check for indexed pointer access: (load i8, (add ptr, offset))
-      // This handles ptr[i] for byte arrays
+      // This handles ptr[i] for byte arrays where ptr is in a register
       if (Addr.getOpcode() == ISD::ADD) {
         SDValue LHS = Addr.getOperand(0);
         SDValue RHS = Addr.getOperand(1);

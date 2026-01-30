@@ -100,3 +100,66 @@ define i16 @load_byte_use_word() {
   %result = add i16 %ext, 100
   ret i16 %result
 }
+
+;===----------------------------------------------------------------------===;
+; 8-bit indexed global array access
+;===----------------------------------------------------------------------===;
+
+@byte_array = global [16 x i8] zeroinitializer
+
+; Test 8-bit load from global array with constant index
+; CHECK-LABEL: load_byte_array_const:
+; CHECK: sep #32
+; CHECK: lda byte_array+5
+; CHECK: rep #32
+; CHECK: and #255
+; CHECK: rts
+define i16 @load_byte_array_const() {
+  %ptr = getelementptr [16 x i8], ptr @byte_array, i16 0, i16 5
+  %v = load i8, ptr %ptr
+  %ext = zext i8 %v to i16
+  ret i16 %ext
+}
+
+; Test 8-bit load from global array with variable index
+; CHECK-LABEL: load_byte_array_var:
+; Variable index (in A per calling convention) goes to X register, then indexed load
+; CHECK: tax
+; CHECK: sep #32
+; CHECK: lda byte_array,x
+; CHECK: rep #32
+; CHECK: and #255
+; CHECK: rts
+define i16 @load_byte_array_var(i16 %idx) {
+  %ptr = getelementptr [16 x i8], ptr @byte_array, i16 0, i16 %idx
+  %v = load i8, ptr %ptr
+  %ext = zext i8 %v to i16
+  ret i16 %ext
+}
+
+; Test 8-bit store to global array with constant index
+; CHECK-LABEL: store_byte_array_const:
+; CHECK: sep #32
+; CHECK: sta byte_array+3
+; CHECK: rep #32
+; CHECK: rts
+define void @store_byte_array_const(i16 %val) {
+  %trunc = trunc i16 %val to i8
+  %ptr = getelementptr [16 x i8], ptr @byte_array, i16 0, i16 3
+  store i8 %trunc, ptr %ptr
+  ret void
+}
+
+; Test 8-bit store to global array with variable index
+; CHECK-LABEL: store_byte_array_var:
+; val is in A, idx is in X (per calling convention) - use directly
+; CHECK: sep #32
+; CHECK: sta byte_array,x
+; CHECK: rep #32
+; CHECK: rts
+define void @store_byte_array_var(i16 %val, i16 %idx) {
+  %trunc = trunc i16 %val to i8
+  %ptr = getelementptr [16 x i8], ptr @byte_array, i16 0, i16 %idx
+  store i8 %trunc, ptr %ptr
+  ret void
+}
