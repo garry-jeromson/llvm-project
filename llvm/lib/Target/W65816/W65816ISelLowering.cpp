@@ -915,8 +915,7 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   // Get a count of how many bytes are to be pushed on the stack
   unsigned NumBytes = CCInfo.getStackSize();
 
-  // Since hasReservedCallFrame() returns true, space for outgoing arguments
-  // is pre-allocated in the prologue. CALLSEQ_START/END become no-ops.
+  // CALLSEQ_START allocates space for outgoing stack arguments
   Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
 
   SDValue Glue;
@@ -931,16 +930,18 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     if (VA.isRegLoc()) {
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), Arg));
     } else {
-      // Stack argument - store to the reserved outgoing argument area
+      // Stack argument - store to the outgoing argument area
       assert(VA.isMemLoc() && "Expected memory location for stack arg");
 
-      // Create a frame index for this argument slot
-      // The offset is relative to the start of the outgoing argument area
-      // which is at the bottom of the stack frame (lowest address)
+      // Create a frame index for this argument slot.
+      // The offset is relative to the outgoing argument area, which is
+      // allocated by CALLSEQ_START. Use positive offset since these are
+      // at the top of the outgoing area (lowest addresses, closest to SP).
       int FI = MF.getFrameInfo().CreateFixedObject(
           VA.getLocVT().getSizeInBits() / 8,
           VA.getLocMemOffset(),
-          /*IsImmutable=*/false);
+          /*IsImmutable=*/false,
+          /*isAliased=*/false);
       SDValue FIN = DAG.getFrameIndex(FI, MVT::i16);
 
       // Store the argument to the stack slot

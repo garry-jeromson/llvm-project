@@ -594,50 +594,75 @@ bool W65816ExpandPseudo::expandCMP16rr(Block &MBB, BlockIt MBBI) {
   DebugLoc DL = MI.getDebugLoc();
 
   // CMP16rr $src1, $src2
-  // Compare src1 with src2 by pushing src2 to stack and using CMP stack-relative
-  // (W65816 doesn't have CMP stack-relative, so we use SEC + SBC which sets flags)
+  // Compare src1 with src2 by using SEC + SBC which sets flags.
+  // After comparison, only flags matter - registers can be clobbered.
+  // The branch target blocks will load their own values.
 
   Register Src1Reg = MI.getOperand(0).getReg();
   Register Src2Reg = MI.getOperand(1).getReg();
 
-  // First, ensure src1 is in A
-  if (Src1Reg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
-  } else if (Src1Reg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
+  // Use DP scratch for the comparison operand - simpler and faster
+  // than stack-relative addressing.
+
+  // IMPORTANT: If src2 is in A and we need to move src1 to A,
+  // we must save src2 first before it gets overwritten!
+  if (Src2Reg == W65816::A && Src1Reg != W65816::A) {
+    // Save src2 (which is in A) to DP scratch
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
+
+    // Move src1 to A
+    if (Src1Reg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+    } else if (Src1Reg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TYA);
+    }
+
+    // Set carry and compare: A (src1) - DP (src2)
+    buildMI(MBB, MBBI, W65816::SEC);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
+  } else {
+    // src2 is not in A, or src1 is already in A
+    // First, ensure src1 is in A
+    if (Src1Reg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+    } else if (Src1Reg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TYA);
+    }
+
+    // Set carry and subtract src2 using DP scratch
+    buildMI(MBB, MBBI, W65816::SEC);
+
+    if (Src2Reg == W65816::X) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+          .addReg(W65816::X)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::Y) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+          .addReg(W65816::Y)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::A) {
+      // src1 is also A (comparing A with itself - always equal)
+      // A - A = 0, sets Z=1, N=0, V=0, C=1
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    }
   }
 
-  // For comparison, we need to subtract and discard the result
-  // SEC then SBC sets the flags appropriately
-  buildMI(MBB, MBBI, W65816::SEC);
-
-  // Use stack-relative to compare with src2
-  if (Src2Reg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::PHX);
-    // Use CMP if available, otherwise SEC+SBC
-    // Since we need stack-relative compare and don't have it, use SEC+SBC
-    // But we need to preserve A, so push it first
-    buildMI(MBB, MBBI, W65816::PHA);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_sr), W65816::A)
-        .addImm(2);  // Stack offset is 2 because we pushed A
-    buildMI(MBB, MBBI, W65816::PLA);  // Restore A (flags still set)
-    buildMI(MBB, MBBI, W65816::PLX);  // Restore stack
-  } else if (Src2Reg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::PHY);
-    buildMI(MBB, MBBI, W65816::PHA);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_sr), W65816::A)
-        .addImm(2);
-    buildMI(MBB, MBBI, W65816::PLA);
-    buildMI(MBB, MBBI, W65816::PLY);
-  } else if (Src2Reg == W65816::A) {
-    // Comparing A with itself - always equal
-    buildMI(MBB, MBBI, W65816::PHA);
-    buildMI(MBB, MBBI, W65816::PHA);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_sr), W65816::A)
-        .addImm(2);
-    buildMI(MBB, MBBI, W65816::PLA);
-    buildMI(MBB, MBBI, W65816::PLA);
-  }
+  // Flags are now set based on src1 - src2:
+  // - N = 1 if result is negative
+  // - Z = 1 if result is zero (src1 == src2)
+  // - C = 1 if no borrow (src1 >= src2 unsigned)
+  // - V = 1 if signed overflow
 
   MI.eraseFromParent();
   return true;

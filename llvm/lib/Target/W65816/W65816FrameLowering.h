@@ -47,9 +47,8 @@ public:
   void processFunctionBeforeFrameFinalized(
       MachineFunction &MF, RegScavenger *RS = nullptr) const override;
 
-  /// Returns true to indicate that outgoing call arguments should be
-  /// reserved in the prologue. This is simpler for W65816 since we don't
-  /// have efficient dynamic stack adjustment.
+  /// Returns true - outgoing call arguments are reserved in the prologue.
+  /// This simplifies stack management since the frame size is fixed.
   bool hasReservedCallFrame(const MachineFunction &MF) const override {
     return true;
   }

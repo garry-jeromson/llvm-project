@@ -261,7 +261,8 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
 MachineBasicBlock::iterator W65816FrameLowering::eliminateCallFramePseudoInstr(
     MachineFunction &MF, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MI) const {
-  // Simply remove ADJCALLSTACKDOWN and ADJCALLSTACKUP pseudos
+  // With hasReservedCallFrame() = true, the call frame space is pre-allocated
+  // in the prologue. ADJCALLSTACKDOWN/UP become no-ops.
   return MBB.erase(MI);
 }
 

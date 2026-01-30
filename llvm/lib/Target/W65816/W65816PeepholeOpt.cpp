@@ -18,6 +18,15 @@
 // 2. Eliminating redundant branches:
 //    - BRA to fall-through block -> (delete, execution falls through anyway)
 //
+// 3. Eliminating redundant flag operations:
+//    - CLC; CLC -> CLC (remove duplicate)
+//    - SEC; SEC -> SEC (remove duplicate)
+//
+// 4. Eliminating redundant push/pop pairs:
+//    - PHA; PLA -> (delete both, value stays in A)
+//    - PHX; PLX -> (delete both, value stays in X)
+//    - PHY; PLY -> (delete both, value stays in Y)
+//
 //===----------------------------------------------------------------------===//
 
 #include "W65816.h"
@@ -63,6 +72,20 @@ bool W65816PeepholeOpt::isRedundantTransferPair(unsigned First, unsigned Second)
          (First == W65816::TYA && Second == W65816::TAY);
 }
 
+/// Check if two opcodes form a redundant push/pop pair.
+/// Returns true for: PHA/PLA, PHX/PLX, PHY/PLY
+static bool isRedundantPushPopPair(unsigned First, unsigned Second) {
+  return (First == W65816::PHA && Second == W65816::PLA) ||
+         (First == W65816::PHX && Second == W65816::PLX) ||
+         (First == W65816::PHY && Second == W65816::PLY);
+}
+
+/// Check if opcode is a duplicate flag operation (CLC or SEC).
+static bool isDuplicateFlagOp(unsigned First, unsigned Second) {
+  return (First == W65816::CLC && Second == W65816::CLC) ||
+         (First == W65816::SEC && Second == W65816::SEC);
+}
+
 bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
   bool Modified = false;
 
@@ -78,20 +101,38 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
     }
 
     MachineInstr &NextMI = *NextMBBI;
-
-    // Check for redundant transfer pairs
     unsigned Opcode = MI.getOpcode();
     unsigned NextOpcode = NextMI.getOpcode();
 
+    // Check for redundant transfer pairs (TAX/TXA, TAY/TYA, etc.)
     if (isRedundantTransferPair(Opcode, NextOpcode)) {
-      // Remove both instructions
       LLVM_DEBUG(dbgs() << "Removing redundant transfer pair:\n  "
                         << MI << "  " << NextMI);
-
       auto AfterNext = std::next(NextMBBI);
       MBB.erase(MBBI);
       MBB.erase(NextMBBI);
       MBBI = AfterNext;
+      Modified = true;
+      continue;
+    }
+
+    // Check for redundant push/pop pairs (PHA/PLA, PHX/PLX, PHY/PLY)
+    if (isRedundantPushPopPair(Opcode, NextOpcode)) {
+      LLVM_DEBUG(dbgs() << "Removing redundant push/pop pair:\n  "
+                        << MI << "  " << NextMI);
+      auto AfterNext = std::next(NextMBBI);
+      MBB.erase(MBBI);
+      MBB.erase(NextMBBI);
+      MBBI = AfterNext;
+      Modified = true;
+      continue;
+    }
+
+    // Check for duplicate flag operations (CLC/CLC, SEC/SEC)
+    if (isDuplicateFlagOp(Opcode, NextOpcode)) {
+      LLVM_DEBUG(dbgs() << "Removing duplicate flag operation:\n  " << NextMI);
+      MBB.erase(NextMBBI);
+      // Don't advance MBBI - check if there are more duplicates
       Modified = true;
       continue;
     }

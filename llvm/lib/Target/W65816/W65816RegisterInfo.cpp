@@ -128,19 +128,46 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
 
   // Regular stack-relative addressing
   // Calculate the offset from the stack pointer
-  // Object offset is negative (below the frame), StackSize gives total frame size
   int64_t Offset = MFI.getObjectOffset(FrameIndex);
   uint64_t StackSize = MFI.getStackSize();
+  bool IsFixed = MFI.isFixedObjectIndex(FrameIndex);
+  uint64_t MaxCallFrameSize = MFI.getMaxCallFrameSize();
 
-  // The offset from SP is: StackSize + ObjectOffset + SPAdj
-  // Since ObjectOffset is typically negative (object below frame pointer),
-  // and stack grows down, we add StackSize to get offset from SP
-  Offset += StackSize + SPAdj;
+  // Stack layout (addresses grow down, SP points to last used byte):
+  //
+  // For OUTGOING args (in caller, created by LowerCall):
+  //   With hasReservedCallFrame() = true, space is pre-allocated in prologue.
+  //   Args at offsets 0, 2, 4 map to SP+1, SP+3, SP+5.
+  //
+  // For INCOMING args (in callee, created by LowerFormalArguments):
+  //   After JSR pushes return address (2 bytes), then callee pushes its frame:
+  //   - SP+1 to SP+StackSize = callee's locals/spills
+  //   - SP+StackSize+1, SP+StackSize+2 = return address
+  //   - SP+StackSize+3+ = incoming args (offset 0, 2, 4...)
+  //   So incoming arg at offset N is at SP + StackSize + 2 + N + 1.
+  //
+  // For LOCALS (negative offsets from frame):
+  //   Local at offset -N is at SP + StackSize - N + 1.
+  //
+  // We distinguish outgoing from incoming by checking MaxCallFrameSize:
+  // - Outgoing: fixed, offset >= 0, offset < MaxCallFrameSize
+  // - Incoming: fixed, offset >= 0, but not in outgoing area (or no calls)
 
-  // Stack-relative addressing on W65816 uses offset from current SP
-  // The offset must be positive and fit in 8 bits (0-255)
-  // Add 1 because SP points to last used byte, not next free
-  Offset += 1;
+  if (IsFixed && Offset >= 0) {
+    if (MaxCallFrameSize > 0 && (uint64_t)Offset < MaxCallFrameSize) {
+      // Outgoing call argument - at bottom of caller's pre-allocated frame
+      Offset += 1;
+    } else {
+      // Incoming argument - above return address
+      Offset += StackSize + SPAdj;
+      Offset += 2; // return address size
+      Offset += 1; // SP points to last used byte
+    }
+  } else {
+    // Locals (negative offset from frame base)
+    Offset += StackSize + SPAdj;
+    Offset += 1; // SP points to last used byte
+  }
 
   // For stack-relative instructions, replace frame index with immediate offset
   if (Opcode == W65816::LDA_sr || Opcode == W65816::STA_sr ||
