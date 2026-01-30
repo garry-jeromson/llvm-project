@@ -72,16 +72,14 @@ define i16 @test_bswap_add(i16 %a, i16 %b) {
 
 ;===----------------------------------------------------------------------===
 ; Memory INC/DEC - increment/decrement memory location
-; TODO: This could be optimized to use INC_abs/DEC_abs directly via peephole
-; Currently generates load-modify-store sequence
+; Memory INC/DEC optimization: load-modify-store patterns are optimized
+; to single memory instructions when the value is only used for the modify
 ;===----------------------------------------------------------------------===
 
 @counter = global i16 0
 
 ; CHECK-LABEL: test_inc_memory:
-; CHECK: lda global_var
-; CHECK: inc a
-; CHECK: sta global_var
+; CHECK: inc global_var
 ; CHECK: rts
 define void @test_inc_memory() {
   %val = load i16, ptr @global_var
@@ -91,9 +89,7 @@ define void @test_inc_memory() {
 }
 
 ; CHECK-LABEL: test_dec_memory:
-; CHECK: lda global_var
-; CHECK: dec a
-; CHECK: sta global_var
+; CHECK: dec global_var
 ; CHECK: rts
 define void @test_dec_memory() {
   %val = load i16, ptr @global_var

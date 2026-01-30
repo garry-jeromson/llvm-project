@@ -252,9 +252,112 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
-      // TODO: Memory shift optimization (ASL/LSR $addr instead of load-shift-store)
-      // Disabled for now - needs more work on chain handling.
-      // The memory shift instructions are defined and can be used via intrinsics.
+      // Memory operation optimization: detect load-modify-store patterns
+      // and replace with single memory instructions (INC/DEC/ASL/LSR)
+      // Pattern: store(op(load(addr)), addr) where op is add/sub/shl/lshr by 1
+      if (Addr.getOpcode() == W65816ISD::WRAPPER) {
+        SDValue Inner = Addr.getOperand(0);
+        if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+          // Check what operation is being stored
+          unsigned MemOpc = 0;
+          SDValue LoadVal;
+
+          // Check for add/sub by 1 (INC/DEC)
+          // Note: sub x, 1 is canonicalized to add x, -1
+          if (Value.getOpcode() == ISD::ADD || Value.getOpcode() == ISD::SUB) {
+            SDValue LHS = Value.getOperand(0);
+            SDValue RHS = Value.getOperand(1);
+
+            // Check for (add/sub load, const) or (add const, load)
+            if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(RHS)) {
+              if (LHS.getOpcode() == ISD::LOAD) {
+                int64_t Val = CN->getSExtValue();
+                if (Val == 1) {
+                  LoadVal = LHS;
+                  MemOpc = (Value.getOpcode() == ISD::ADD) ? W65816::INC_abs : W65816::DEC_abs;
+                } else if (Val == -1 && Value.getOpcode() == ISD::ADD) {
+                  // add x, -1 is the same as sub x, 1 (DEC)
+                  LoadVal = LHS;
+                  MemOpc = W65816::DEC_abs;
+                }
+              }
+            } else if (Value.getOpcode() == ISD::ADD) {
+              if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(LHS)) {
+                if (RHS.getOpcode() == ISD::LOAD) {
+                  int64_t Val = CN->getSExtValue();
+                  if (Val == 1) {
+                    LoadVal = RHS;
+                    MemOpc = W65816::INC_abs;
+                  } else if (Val == -1) {
+                    LoadVal = RHS;
+                    MemOpc = W65816::DEC_abs;
+                  }
+                }
+              }
+            }
+          }
+          // Check for shl/lshr by 1 (ASL/LSR)
+          else if (Value.getOpcode() == ISD::SHL || Value.getOpcode() == ISD::SRL) {
+            SDValue Src = Value.getOperand(0);
+            SDValue Amt = Value.getOperand(1);
+
+            if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Amt)) {
+              if (CN->getZExtValue() == 1 && Src.getOpcode() == ISD::LOAD) {
+                LoadVal = Src;
+                MemOpc = (Value.getOpcode() == ISD::SHL) ? W65816::ASL_abs : W65816::LSR_abs;
+              }
+            }
+          }
+
+          // If we found a valid pattern, check that load is from the same address
+          if (MemOpc != 0 && LoadVal.getNode()) {
+            LoadSDNode *LD = cast<LoadSDNode>(LoadVal.getNode());
+            SDValue LoadAddr = LD->getBasePtr();
+
+            // Check if load address matches store address (same global)
+            if (LoadAddr.getOpcode() == W65816ISD::WRAPPER) {
+              SDValue LoadInner = LoadAddr.getOperand(0);
+              if (GlobalAddressSDNode *LoadGA = dyn_cast<GlobalAddressSDNode>(LoadInner)) {
+                if (LoadGA->getGlobal() == GA->getGlobal() &&
+                    LoadGA->getOffset() == GA->getOffset()) {
+                  // Check that load has only one use (the operation) AND
+                  // the operation result has only one use (the store)
+                  // This ensures we're not losing a value that's used elsewhere
+                  if (LoadVal.hasOneUse() && Value.hasOneUse()) {
+                    // Use direct page variant if applicable
+                    if (isDirectPageGlobal(GA->getGlobal())) {
+                      switch (MemOpc) {
+                        case W65816::INC_abs: MemOpc = W65816::INC_dp; break;
+                        case W65816::DEC_abs: MemOpc = W65816::DEC_dp; break;
+                        case W65816::ASL_abs: MemOpc = W65816::ASL_dp; break;
+                        case W65816::LSR_abs: MemOpc = W65816::LSR_dp; break;
+                      }
+                      SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                          GA->getGlobal(), DL, MVT::i8, GA->getOffset());
+                      // Chain through the load's chain for proper ordering
+                      SDValue Ops[] = {TargetAddr, LD->getChain()};
+                      MachineSDNode *MemOp =
+                          CurDAG->getMachineNode(MemOpc, DL, MVT::Other, Ops);
+                      CurDAG->setNodeMemRefs(MemOp, {ST->getMemOperand()});
+                      ReplaceNode(N, MemOp);
+                      return;
+                    }
+                    // Use absolute addressing
+                    SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                        GA->getGlobal(), DL, MVT::i16, GA->getOffset());
+                    SDValue Ops[] = {TargetAddr, LD->getChain()};
+                    MachineSDNode *MemOp =
+                        CurDAG->getMachineNode(MemOpc, DL, MVT::Other, Ops);
+                    CurDAG->setNodeMemRefs(MemOp, {ST->getMemOperand()});
+                    ReplaceNode(N, MemOp);
+                    return;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
 
       // Check for frame index - use stack-relative addressing
       if (FrameIndexSDNode *FIN = dyn_cast<FrameIndexSDNode>(Addr)) {
