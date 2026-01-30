@@ -15,6 +15,7 @@
 
 #include "W65816.h"
 #include "W65816InstrInfo.h"
+#include "W65816MachineFunctionInfo.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
@@ -175,6 +176,13 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
 
   // Min/max signed and unsigned
   setMinimumJumpTableEntries(INT_MAX); // Don't use jump tables
+
+  // Varargs support
+  // VASTART needs custom lowering, others can be expanded
+  setOperationAction(ISD::VASTART, MVT::Other, Custom);
+  setOperationAction(ISD::VAARG, MVT::Other, Expand);
+  setOperationAction(ISD::VAEND, MVT::Other, Expand);
+  setOperationAction(ISD::VACOPY, MVT::Other, Expand);
 }
 
 const char *W65816TargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -213,6 +221,8 @@ SDValue W65816TargetLowering::LowerOperation(SDValue Op,
     return LowerLoad(Op, DAG);
   case ISD::STORE:
     return LowerStore(Op, DAG);
+  case ISD::VASTART:
+    return LowerVASTART(Op, DAG);
   default:
     llvm_unreachable("Unexpected operation to lower");
   }
@@ -756,6 +766,15 @@ SDValue W65816TargetLowering::LowerFormalArguments(
     }
   }
 
+  // For vararg functions, record the frame index where varargs start
+  if (IsVarArg) {
+    W65816MachineFunctionInfo *FuncInfo = MF.getInfo<W65816MachineFunctionInfo>();
+    // Varargs start after the last fixed argument on the stack
+    unsigned Offset = CCInfo.getStackSize();
+    int FI = MFI.CreateFixedObject(2, Offset, true);
+    FuncInfo->setVarArgsFrameIndex(FI);
+  }
+
   return Chain;
 }
 
@@ -915,4 +934,25 @@ bool W65816TargetLowering::CanLowerReturn(
   SmallVector<CCValAssign, 16> RVLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, RVLocs, Context);
   return CCInfo.CheckReturn(Outs, RetCC_W65816);
+}
+
+SDValue W65816TargetLowering::LowerVASTART(SDValue Op,
+                                            SelectionDAG &DAG) const {
+  MachineFunction &MF = DAG.getMachineFunction();
+  W65816MachineFunctionInfo *FuncInfo = MF.getInfo<W65816MachineFunctionInfo>();
+
+  SDLoc DL(Op);
+  SDValue Chain = Op.getOperand(0);
+  SDValue Ptr = Op.getOperand(1);
+  EVT PtrVT = Ptr.getValueType();
+
+  // Get the frame index of the first vararg argument
+  SDValue FrameIndex = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
+
+  // Get the source value for the store
+  const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
+
+  // Store the frame index to the va_list pointer
+  // This is the address where the first vararg is located
+  return DAG.getStore(Chain, DL, FrameIndex, Ptr, MachinePointerInfo(SV));
 }
