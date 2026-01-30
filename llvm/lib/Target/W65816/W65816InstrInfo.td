@@ -616,11 +616,23 @@ def STX_abs : W65816Inst24<0x8E, (outs), (ins IDX16:$src, addr16:$addr),
                            "stx\t$addr",
                            []>;
 
+// STX - Store X Register to Direct Page (16-bit mode)
+let Predicates = [UseIdx16Bit], mayStore = 1 in
+def STX_dp : W65816Inst16<0x86, (outs), (ins IDX16:$src, addr8dp:$imm),
+                          "stx\t$imm",
+                          []>;
+
 // STY - Store Y Register (16-bit mode)
 let Predicates = [UseIdx16Bit] in
 def STY_abs : W65816Inst24<0x8C, (outs), (ins IDX16:$src, addr16:$addr),
                            "sty\t$addr",
                            []>;
+
+// STY - Store Y Register to Direct Page (16-bit mode)
+let Predicates = [UseIdx16Bit], mayStore = 1 in
+def STY_dp : W65816Inst16<0x84, (outs), (ins IDX16:$src, addr8dp:$imm),
+                          "sty\t$imm",
+                          []>;
 
 // STX - Store X Register (8-bit mode) - uses 3-byte format
 let Predicates = [UseIdx8Bit] in
@@ -681,6 +693,11 @@ let Defs = [P], Uses = [P, A] in {
                             (ins imm8:$imm),
                             "adc\t$imm,s", []>;
 
+  // ADC Direct Page - adc dp
+  def ADC_dp : W65816Inst16<0x65, (outs ACC16:$dst),
+                            (ins addr8dp:$imm),
+                            "adc\t$imm", []>;
+
   // SBC - Subtract with Carry
   // Note: Uses A implicitly since it's always the source/destination
   def SBC_imm16 : W65816Inst24<0xE9, (outs ACC16:$dst),
@@ -695,6 +712,11 @@ let Defs = [P], Uses = [P, A] in {
   def SBC_sr : W65816Inst16<0xE3, (outs ACC16:$dst),
                             (ins imm8:$imm),
                             "sbc\t$imm,s", []>;
+
+  // SBC Direct Page - sbc dp
+  def SBC_dp : W65816Inst16<0xE5, (outs ACC16:$dst),
+                            (ins addr8dp:$imm),
+                            "sbc\t$imm", []>;
 }
 
 let Defs = [P] in {

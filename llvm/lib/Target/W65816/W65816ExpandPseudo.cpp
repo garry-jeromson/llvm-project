@@ -29,6 +29,11 @@ using namespace llvm;
 #define DEBUG_TYPE "w65816-expand-pseudo"
 #define W65816_EXPAND_PSEUDO_NAME "W65816 pseudo instruction expansion pass"
 
+// Scratch Direct Page address for ADD16rr/SUB16rr optimization.
+// Uses $FE (254) which is near the end of DP and typically unused.
+// This provides faster access than stack-relative addressing.
+static const unsigned SCRATCH_DP_ADDR = 0xFE;
+
 // W65816 condition codes - must match W65816ISelLowering.cpp
 namespace W65816CC {
 enum CondCode {
@@ -342,12 +347,13 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
           .add(AddrOp);
     }
 
-    // Clear carry and add X to A
+    // Clear carry and add X to A using DP scratch
     BuildMI(MBB, MBBI, DL, TII->get(W65816::CLC));
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::PHX));
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_sr), W65816::A)
-        .addImm(1);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::PLX));
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+        .addReg(W65816::X)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
 
     // Move result to destination if needed
     if (DstReg == W65816::X) {
@@ -381,26 +387,29 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
   buildMI(MBB, MBBI, W65816::CLC);
 
   // Now add src2
-  // For now, we use a simplified approach:
-  // If src2 is in X or Y, we push it, then ADC from stack
+  // Use Direct Page scratch location for faster access than stack-relative.
+  // STX/STY to DP + ADC from DP is faster than PHX/ADC_sr/PLX.
   if (Src2Reg == W65816::X) {
-    // Push X, ADC from stack (offset 1,S), pull to discard
-    buildMI(MBB, MBBI, W65816::PHX);
-    // ADC_sr needs: dst reg, src reg, immediate offset
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_sr), W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLX);  // Restore stack
+    // Store X to DP scratch, ADC from DP
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+        .addReg(W65816::X)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::PHY);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_sr), W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLY);  // Restore stack
+    // Store Y to DP scratch, ADC from DP
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+        .addReg(W65816::Y)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::A) {
-    // Adding A to itself: need to store first
-    buildMI(MBB, MBBI, W65816::PHA);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_sr), W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLA);  // Clean stack (but lose the value)
+    // Adding A to itself: store A to DP scratch, ADC from DP
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   }
 
   // Result is now in A
@@ -473,23 +482,26 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
   // Set carry before subtraction (borrow = !carry)
   buildMI(MBB, MBBI, W65816::SEC);
 
-  // Subtract src2 using stack-relative addressing
+  // Subtract src2 using Direct Page scratch location for faster access
   if (Src2Reg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::PHX);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_sr), W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLX);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+        .addReg(W65816::X)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::PHY);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_sr), W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLY);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+        .addReg(W65816::Y)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::A) {
     // Subtracting A from itself is always 0
-    buildMI(MBB, MBBI, W65816::PHA);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_sr), W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLA);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   }
 
   // Move result to destination if needed
