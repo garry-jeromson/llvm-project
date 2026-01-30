@@ -50,6 +50,7 @@
 #include "ToolChains/TCE.h"
 #include "ToolChains/UEFI.h"
 #include "ToolChains/VEToolchain.h"
+#include "ToolChains/W65816.h"
 #include "ToolChains/WebAssembly.h"
 #include "ToolChains/XCore.h"
 #include "ToolChains/ZOS.h"
@@ -6990,6 +6991,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         break;
       case llvm::Triple::msp430:
         TC = std::make_unique<toolchains::MSP430ToolChain>(*this, Target, Args);
+        break;
+      case llvm::Triple::w65816:
+        TC = std::make_unique<toolchains::W65816ToolChain>(*this, Target, Args);
         break;
       case llvm::Triple::riscv32:
       case llvm::Triple::riscv64:

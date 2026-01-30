@@ -44,9 +44,14 @@ static std::string computeDataLayoutString() {
   // p:16:16 = 16-bit pointers, 16-bit aligned (prevents decomposition to byte loads)
   // i8:8 = 8-bit integers, 8-bit aligned
   // i16:16 = 16-bit integers, 16-bit aligned
+  // i32:16 = 32-bit integers, 16-bit aligned (matches Clang's LongAlign)
+  // i64:16 = 64-bit integers, 16-bit aligned
+  // f32:16 = 32-bit floats, 16-bit aligned
+  // f64:16 = 64-bit floats, 16-bit aligned
+  // a:8 = aggregates, 8-bit aligned
   // n8:16 = native integer widths are 8 and 16 bits
   // S16 = stack natural alignment is 16 bits
-  return "e-m:e-p:16:16-i8:8-i16:16-n8:16-S16";
+  return "e-m:e-p:16:16-i8:8-i16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16";
 }
 
 W65816TargetMachine::W65816TargetMachine(const Target &T, const Triple &TT,

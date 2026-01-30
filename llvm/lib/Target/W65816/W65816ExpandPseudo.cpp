@@ -732,18 +732,17 @@ bool W65816ExpandPseudo::expandBR_CC(Block &MBB, BlockIt MBBI) {
     // .Lv_set: BPL TargetBB (V=1, N=0 -> N!=V)
     BuildMI(VSetBB, DL, TII->get(W65816::BPL)).addMBB(TargetBB);
 
-    // Update successors
+    // NotTakenBB is where we fall through to continue
+    // Transfer remaining instructions after MI to NotTakenBB
+    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
+    NotTakenBB->transferSuccessors(&MBB);
+
+    // Update successors AFTER transferSuccessors (which clears MBB's successors)
     MBB.addSuccessor(VSetBB);
     MBB.addSuccessor(TargetBB);
     MBB.addSuccessor(NotTakenBB);
     VSetBB->addSuccessor(TargetBB);
     VSetBB->addSuccessor(NotTakenBB);
-
-    // NotTakenBB is where we fall through to continue
-    // Transfer remaining instructions after MI to NotTakenBB
-    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
-    NotTakenBB->transferSuccessors(&MBB);
-    MBB.addSuccessor(NotTakenBB);
     break;
   }
 
@@ -768,15 +767,15 @@ bool W65816ExpandPseudo::expandBR_CC(Block &MBB, BlockIt MBBI) {
 
     BuildMI(VSetBB, DL, TII->get(W65816::BMI)).addMBB(TargetBB);
 
+    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
+    NotTakenBB->transferSuccessors(&MBB);
+
+    // Update successors AFTER transferSuccessors (which clears MBB's successors)
     MBB.addSuccessor(VSetBB);
     MBB.addSuccessor(TargetBB);
     MBB.addSuccessor(NotTakenBB);
     VSetBB->addSuccessor(TargetBB);
     VSetBB->addSuccessor(NotTakenBB);
-
-    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
-    NotTakenBB->transferSuccessors(&MBB);
-    MBB.addSuccessor(NotTakenBB);
     break;
   }
 
@@ -803,15 +802,15 @@ bool W65816ExpandPseudo::expandBR_CC(Block &MBB, BlockIt MBBI) {
 
     BuildMI(VSetBB, DL, TII->get(W65816::BMI)).addMBB(TargetBB);
 
+    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
+    NotTakenBB->transferSuccessors(&MBB);
+
+    // Update successors AFTER transferSuccessors (which clears MBB's successors)
     MBB.addSuccessor(VSetBB);
     MBB.addSuccessor(TargetBB);
     MBB.addSuccessor(NotTakenBB);
     VSetBB->addSuccessor(TargetBB);
     VSetBB->addSuccessor(NotTakenBB);
-
-    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
-    NotTakenBB->transferSuccessors(&MBB);
-    MBB.addSuccessor(NotTakenBB);
     break;
   }
 
@@ -838,15 +837,15 @@ bool W65816ExpandPseudo::expandBR_CC(Block &MBB, BlockIt MBBI) {
 
     BuildMI(VSetBB, DL, TII->get(W65816::BPL)).addMBB(TargetBB);
 
+    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
+    NotTakenBB->transferSuccessors(&MBB);
+
+    // Update successors AFTER transferSuccessors (which clears MBB's successors)
     MBB.addSuccessor(VSetBB);
     MBB.addSuccessor(TargetBB);
     MBB.addSuccessor(NotTakenBB);
     VSetBB->addSuccessor(TargetBB);
     VSetBB->addSuccessor(NotTakenBB);
-
-    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
-    NotTakenBB->transferSuccessors(&MBB);
-    MBB.addSuccessor(NotTakenBB);
     break;
   }
 
@@ -1197,15 +1196,15 @@ bool W65816ExpandPseudo::expandSHL16rv(Block &MBB, BlockIt MBBI) {
   BuildMI(LoopBB, DL, TII->get(W65816::BNE))
       .addMBB(LoopBB);
 
-  // Update successors
+  // Transfer rest of block to DoneBB
+  DoneBB->splice(DoneBB->end(), &MBB, std::next(MBBI), MBB.end());
+  DoneBB->transferSuccessors(&MBB);
+
+  // Update successors AFTER transferSuccessors (which clears MBB's successors)
   MBB.addSuccessor(LoopBB);
   MBB.addSuccessor(DoneBB);
   LoopBB->addSuccessor(LoopBB);  // Loop back
   LoopBB->addSuccessor(DoneBB);  // Exit
-
-  // Transfer rest of block to DoneBB
-  DoneBB->splice(DoneBB->end(), &MBB, std::next(MBBI), MBB.end());
-  DoneBB->transferSuccessors(&MBB);
 
   // Result is in A (ACC16), no need to move to destination
 
@@ -1265,13 +1264,14 @@ bool W65816ExpandPseudo::expandSRL16rv(Block &MBB, BlockIt MBBI) {
   BuildMI(LoopBB, DL, TII->get(W65816::BNE))
       .addMBB(LoopBB);
 
+  DoneBB->splice(DoneBB->end(), &MBB, std::next(MBBI), MBB.end());
+  DoneBB->transferSuccessors(&MBB);
+
+  // Update successors AFTER transferSuccessors (which clears MBB's successors)
   MBB.addSuccessor(LoopBB);
   MBB.addSuccessor(DoneBB);
   LoopBB->addSuccessor(LoopBB);
   LoopBB->addSuccessor(DoneBB);
-
-  DoneBB->splice(DoneBB->end(), &MBB, std::next(MBBI), MBB.end());
-  DoneBB->transferSuccessors(&MBB);
 
   // Result is in A (ACC16), no need to move to destination
 
@@ -1334,13 +1334,14 @@ bool W65816ExpandPseudo::expandSRA16rv(Block &MBB, BlockIt MBBI) {
   BuildMI(LoopBB, DL, TII->get(W65816::BNE))
       .addMBB(LoopBB);
 
+  DoneBB->splice(DoneBB->end(), &MBB, std::next(MBBI), MBB.end());
+  DoneBB->transferSuccessors(&MBB);
+
+  // Update successors AFTER transferSuccessors (which clears MBB's successors)
   MBB.addSuccessor(LoopBB);
   MBB.addSuccessor(DoneBB);
   LoopBB->addSuccessor(LoopBB);
   LoopBB->addSuccessor(DoneBB);
-
-  DoneBB->splice(DoneBB->end(), &MBB, std::next(MBBI), MBB.end());
-  DoneBB->transferSuccessors(&MBB);
 
   // Result is in A (ACC16), no need to move to destination
 

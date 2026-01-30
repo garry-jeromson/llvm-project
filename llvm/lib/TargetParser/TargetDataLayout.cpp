@@ -585,7 +585,7 @@ std::string Triple::computeDataLayout(StringRef ABIName) const {
   case Triple::msp430:
     return "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16";
   case Triple::w65816:
-    return "e-m:e-p:16:8-i8:8-i16:16-n8:16-S16";
+    return "e-m:e-p:16:16-i8:8-i16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16";
   case Triple::ppc:
   case Triple::ppcle:
   case Triple::ppc64:
