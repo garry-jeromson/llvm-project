@@ -1,0 +1,76 @@
+# RUN: llvm-mc -disassemble -triple=w65816-unknown-none %s | FileCheck %s
+
+# Implied instructions (1 byte)
+0x18                     # CHECK: clc
+0x38                     # CHECK: sec
+0xea                     # CHECK: nop
+0x48                     # CHECK: pha
+0x68                     # CHECK: pla
+0x8a                     # CHECK: txa
+0xaa                     # CHECK: tax
+0x98                     # CHECK: tya
+0xa8                     # CHECK: tay
+0xda                     # CHECK: phx
+0xfa                     # CHECK: plx
+0x5a                     # CHECK: phy
+0x7a                     # CHECK: ply
+0x0b                     # CHECK: phd
+0x2b                     # CHECK: pld
+0x60                     # CHECK: rts
+0x6b                     # CHECK: rtl
+0x40                     # CHECK: rti
+0x9a                     # CHECK: txs
+0xba                     # CHECK: tsx
+0xc8                     # CHECK: iny
+0x88                     # CHECK: dey
+0xe8                     # CHECK: inx
+0xca                     # CHECK: dex
+
+# Accumulator shifts (1 byte, implied A register)
+0x0a                     # CHECK: asl	a
+0x4a                     # CHECK: lsr	a
+0x2a                     # CHECK: rol	a
+0x6a                     # CHECK: ror	a
+0x1a                     # CHECK: inc	a
+0x3a                     # CHECK: dec	a
+
+# Branch instructions (2 bytes)
+0x80 0x10                # CHECK: bra	16
+0xf0 0xfe                # CHECK: beq	254
+0xd0 0x20                # CHECK: bne	32
+0xb0 0x05                # CHECK: bcs	5
+0x90 0x08                # CHECK: bcc	8
+
+# Load immediate (3 bytes)
+0xa9 0x42 0x00           # CHECK: lda	#66
+0xa2 0xff 0x7f           # CHECK: ldx	#32767
+0xa0 0x00 0x80           # CHECK: ldy	#32768
+
+# Load/Store absolute (3 bytes)
+0xad 0x00 0x20           # CHECK: lda	$2000
+0xae 0x10 0x21           # CHECK: ldx	$2110
+0xac 0x20 0x21           # CHECK: ldy	$2120
+0x8d 0x15 0x21           # CHECK: sta	$2115
+
+# Direct page load/store (2 bytes)
+0xa5 0x10                # CHECK: lda	$0010
+0x85 0x20                # CHECK: sta	$0020
+0x84 0x30                # CHECK: sty	$0030
+0x86 0x40                # CHECK: stx	$0040
+
+# Stack relative (2 bytes)
+0xa3 0x01                # CHECK: lda	1,s
+0x83 0x05                # CHECK: sta	5,s
+
+# Logic (3 bytes - immediate)
+0x29 0xff 0x00           # CHECK: and	#255
+0x09 0x80 0x00           # CHECK: ora	#128
+0x49 0x55 0xaa           # CHECK: eor	#43605
+
+# Jump/Call (3 bytes)
+0x4c 0x00 0x80           # CHECK: jmp	$8000
+0x20 0x00 0x90           # CHECK: jsr	$9000
+
+# REP/SEP (2 bytes)
+0xc2 0x30                # CHECK: rep	#48
+0xe2 0x20                # CHECK: sep	#32
