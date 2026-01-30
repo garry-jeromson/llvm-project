@@ -30,6 +30,10 @@ W65816MCAsmInfo::W65816MCAsmInfo(const Triple &TT,
   UseIntegratedAssembler = true;
   SupportsDebugInformation = true;
 
+  // Enable Motorola-style integers ($hex and %binary)
+  // This allows traditional W65816 syntax like $FF, $1234, %01010101
+  UseMotorolaIntegers = true;
+
   // W65816 is little-endian
   IsLittleEndian = true;
 
