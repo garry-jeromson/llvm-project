@@ -65,6 +65,16 @@ private:
                                 SmallVectorImpl<MCFixup> &Fixups,
                                 const MCSubtargetInfo &STI) const;
 
+  /// Encodes a 24-bit long address operand.
+  unsigned encodeAddr24(const MCInst &MI, unsigned OpNo,
+                        SmallVectorImpl<MCFixup> &Fixups,
+                        const MCSubtargetInfo &STI) const;
+
+  /// Encodes an 8-bit direct page address operand.
+  unsigned encodeDP(const MCInst &MI, unsigned OpNo,
+                    SmallVectorImpl<MCFixup> &Fixups,
+                    const MCSubtargetInfo &STI) const;
+
   void encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB,
                          SmallVectorImpl<MCFixup> &Fixups,
                          const MCSubtargetInfo &STI) const override;

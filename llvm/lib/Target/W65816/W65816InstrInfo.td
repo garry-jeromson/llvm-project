@@ -131,18 +131,21 @@ def imm16 : Operand<i16> {
 def addr24 : Operand<i32> {
   let PrintMethod = "printLongAddr";
   let ParserMatchClass = Addr24AsmOperand;
+  let EncoderMethod = "encodeAddr24";
 }
 
 // 16-bit absolute address operand
 def addr16 : Operand<i16> {
   let PrintMethod = "printAddrModeMemSrc";
   let ParserMatchClass = Addr16AsmOperand;
+  let EncoderMethod = "encodeAddr16";
 }
 
 // 8-bit direct page address operand
 def addr8dp : Operand<i8> {
   let PrintMethod = "printAddrModeMemSrc";
   let ParserMatchClass = Addr8DPAsmOperand;
+  let EncoderMethod = "encodeDP";
 }
 
 // PC-relative offset for branches

@@ -142,7 +142,10 @@ W65816AsmBackend::createObjectTargetWriter() const {
 void W65816AsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
                                    const MCValue &Target, uint8_t *Data,
                                    uint64_t Value, bool IsResolved) {
-  // If not resolved, the fixup will become a relocation; nothing to do here
+  // Record relocation if fixup is not resolved
+  maybeAddReloc(F, Fixup, Target, Value, IsResolved);
+
+  // If not resolved, we've recorded a relocation; nothing more to do
   if (!IsResolved)
     return;
 

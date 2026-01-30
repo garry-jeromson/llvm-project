@@ -124,6 +124,42 @@ unsigned W65816MCCodeEmitter::encodeStackRelOffset(const MCInst &MI, unsigned Op
   llvm_unreachable("Unhandled operand in encodeStackRelOffset");
 }
 
+unsigned W65816MCCodeEmitter::encodeAddr24(const MCInst &MI, unsigned OpNo,
+                                            SmallVectorImpl<MCFixup> &Fixups,
+                                            const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpNo);
+
+  if (MO.isImm()) {
+    return static_cast<unsigned>(MO.getImm());
+  }
+
+  if (MO.isExpr()) {
+    // Create a 24-bit address fixup
+    addFixup(Fixups, 1, MO.getExpr(), W65816::fixup_w65816_24);
+    return 0;
+  }
+
+  llvm_unreachable("Unhandled operand in encodeAddr24");
+}
+
+unsigned W65816MCCodeEmitter::encodeDP(const MCInst &MI, unsigned OpNo,
+                                        SmallVectorImpl<MCFixup> &Fixups,
+                                        const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpNo);
+
+  if (MO.isImm()) {
+    return static_cast<unsigned>(MO.getImm());
+  }
+
+  if (MO.isExpr()) {
+    // Create an 8-bit direct page address fixup
+    addFixup(Fixups, 1, MO.getExpr(), W65816::fixup_w65816_dp);
+    return 0;
+  }
+
+  llvm_unreachable("Unhandled operand in encodeDP");
+}
+
 /// Encode a PC-relative 8-bit branch target (for short branches).
 unsigned encodePCRelImm(const MCInst &MI, unsigned OpNo,
                         SmallVectorImpl<MCFixup> &Fixups,
