@@ -574,6 +574,14 @@ let Defs = [P], Predicates = [UseIdx16Bit] in {
                              "ldx\t$addr",
                              [(set X16:$dst, (load addr:$addr))]>;
 
+  // LDX direct page,Y - Load X from DP address indexed by Y
+  // Opcode: $B6, 2 bytes
+  def LDX_dpY : W65816Inst16<0xB6, (outs X16:$dst), (ins addr8dp:$imm),
+                             "ldx\t$imm,y", []> {
+    let Uses = [Y];
+    let mayLoad = 1;
+  }
+
   // LDY - Load Y Register (16-bit)
   def LDY_imm16 : W65816Inst24<0xA0, (outs Y16:$dst), (ins imm16:$addr),
                                "ldy\t#$addr",
@@ -581,6 +589,14 @@ let Defs = [P], Predicates = [UseIdx16Bit] in {
 
   def LDY_abs : W65816Inst24<0xAC, (outs IDX16:$dst), (ins addr16:$addr),
                              "ldy\t$addr", []>;
+
+  // LDY direct page,X - Load Y from DP address indexed by X
+  // Opcode: $B4, 2 bytes
+  def LDY_dpX : W65816Inst16<0xB4, (outs Y16:$dst), (ins addr8dp:$imm),
+                             "ldy\t$imm,x", []> {
+    let Uses = [X];
+    let mayLoad = 1;
+  }
 }
 
 //===----------------------------------------------------------------------===//

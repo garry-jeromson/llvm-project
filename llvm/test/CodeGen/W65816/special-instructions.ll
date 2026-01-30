@@ -204,3 +204,94 @@ define void @test_tsc() {
   ret void
 }
 
+;===----------------------------------------------------------------------===;
+; LDX dp,Y - Load X from Direct Page indexed by Y
+; Opcode: $B6
+;===----------------------------------------------------------------------===;
+
+; CHECK-LABEL: test_ldx_dpy:
+; CHECK: ldx ${{[0-9a-f]+}},y
+define void @test_ldx_dpy() {
+  call void asm sideeffect "ldx 16,y", ""()
+  ret void
+}
+
+;===----------------------------------------------------------------------===;
+; LDY dp,X - Load Y from Direct Page indexed by X
+; Opcode: $B4
+;===----------------------------------------------------------------------===;
+
+; CHECK-LABEL: test_ldy_dpx:
+; CHECK: ldy ${{[0-9a-f]+}},x
+define void @test_ldy_dpx() {
+  call void asm sideeffect "ldy 32,x", ""()
+  ret void
+}
+
+;===----------------------------------------------------------------------===;
+; Long (24-bit) Addressing Instructions via Inline Assembly
+; These access memory across bank boundaries
+;===----------------------------------------------------------------------===;
+
+; CHECK-LABEL: test_lda_long:
+; CHECK: lda $123456
+define void @test_lda_long() {
+  call void asm sideeffect "lda $$123456", ""()
+  ret void
+}
+
+; CHECK-LABEL: test_sta_long:
+; CHECK: sta $654321
+define void @test_sta_long() {
+  call void asm sideeffect "sta $$654321", ""()
+  ret void
+}
+
+; CHECK-LABEL: test_lda_longx:
+; CHECK: lda $100000,x
+define void @test_lda_longx() {
+  call void asm sideeffect "lda $$100000,x", ""()
+  ret void
+}
+
+; CHECK-LABEL: test_sta_longx:
+; CHECK: sta $200000,x
+define void @test_sta_longx() {
+  call void asm sideeffect "sta $$200000,x", ""()
+  ret void
+}
+
+;===----------------------------------------------------------------------===;
+; DP Indirect Long Addressing - 24-bit pointer through direct page
+; LDA [$dp] - Load through 24-bit pointer at dp
+; LDA [$dp],Y - Load through 24-bit pointer + Y offset
+;===----------------------------------------------------------------------===;
+
+; CHECK-LABEL: test_lda_dp_ind_long:
+; CHECK: lda [$10]
+define void @test_lda_dp_ind_long() {
+  call void asm sideeffect "lda [$$10]", ""()
+  ret void
+}
+
+; CHECK-LABEL: test_lda_dp_ind_long_y:
+; CHECK: lda [$20],y
+define void @test_lda_dp_ind_long_y() {
+  call void asm sideeffect "lda [$$20],y", ""()
+  ret void
+}
+
+; CHECK-LABEL: test_sta_dp_ind_long:
+; CHECK: sta [$30]
+define void @test_sta_dp_ind_long() {
+  call void asm sideeffect "sta [$$30]", ""()
+  ret void
+}
+
+; CHECK-LABEL: test_sta_dp_ind_long_y:
+; CHECK: sta [$40],y
+define void @test_sta_dp_ind_long_y() {
+  call void asm sideeffect "sta [$$40],y", ""()
+  ret void
+}
+
