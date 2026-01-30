@@ -40,7 +40,17 @@ public:
   enum KindTy {
     k_Token,
     k_Register,
-    k_Immediate
+    k_Immediate,       // Address or immediate value
+    // Indirect addressing modes
+    k_IndirectAddr,      // (addr) - JMP indirect
+    k_IndirectXAddr,     // (addr,x) - JMP indexed indirect
+    k_IndirectLongAddr,  // [addr] - JMP indirect long
+    k_IndirectDP,        // (dp) - DP indirect
+    k_IndirectDPY,       // (dp),y - DP indirect indexed Y
+    k_IndexedIndirectDP, // (dp,x) - Indexed indirect DP
+    k_IndirectDPLong,    // [dp] - DP indirect long
+    k_IndirectDPLongY,   // [dp],y - DP indirect long indexed Y
+    k_StackRelIndirectY  // (offset,s),y - Stack relative indirect indexed Y
   };
 
 private:
@@ -73,7 +83,9 @@ public:
   bool isToken() const override { return Kind == k_Token; }
   bool isImm() const override { return Kind == k_Immediate; }
   bool isReg() const override { return Kind == k_Register; }
-  bool isMem() const override { return false; }
+  bool isMem() const override {
+    return Kind >= k_IndirectAddr && Kind <= k_StackRelIndirectY;
+  }
 
   MCRegister getReg() const override {
     assert(Kind == k_Register && "Invalid type access!");
@@ -86,7 +98,7 @@ public:
   }
 
   const MCExpr *getImm() const {
-    assert(Kind == k_Immediate && "Invalid type access!");
+    assert((Kind == k_Immediate || isMem()) && "Invalid type access!");
     return Imm.Val;
   }
 
@@ -96,6 +108,7 @@ public:
   // Operand type checkers for the AsmMatcher
   // These return true if the operand could match the specified type
 
+  // Immediate operand checkers (for #value syntax)
   bool isImm8() const {
     if (!isImm())
       return false;
@@ -112,23 +125,44 @@ public:
     return true;
   }
 
-  bool isAddr16() const { return isImm16(); }
+  // Address operand checkers (for absolute/direct page addressing)
+  bool isAddr16() const {
+    if (!isImm())
+      return false;
+    if (auto *CE = dyn_cast<MCConstantExpr>(getImm()))
+      return isUInt<16>(CE->getValue()) || isInt<16>(CE->getValue());
+    return true;
+  }
   bool isAddr24() const { return isImm(); }
-  bool isAddr8DP() const { return isImm8(); }
+  bool isAddr8DP() const {
+    if (!isImm())
+      return false;
+    if (auto *CE = dyn_cast<MCConstantExpr>(getImm()))
+      return isUInt<8>(CE->getValue()) || isInt<8>(CE->getValue());
+    return true;
+  }
   bool isBrTarget8() const { return isImm(); }
   bool isBrTarget16() const { return isImm(); }
 
-  // Indirect addressing mode checkers - for now these always return false
-  // since we don't parse indirect modes yet. They can be enabled later.
-  bool isIndirectAddr16() const { return false; }
-  bool isIndirectXAddr16() const { return false; }
-  bool isIndirectLongAddr16() const { return false; }
-  bool isIndirectDP() const { return false; }
-  bool isIndirectDPY() const { return false; }
-  bool isIndexedIndirectDP() const { return false; }
-  bool isIndirectDPLong() const { return false; }
-  bool isIndirectDPLongY() const { return false; }
-  bool isStackRelIndirectY() const { return false; }
+  // Indirect addressing mode checkers
+  // Note: (expr) syntax can be either DP indirect or absolute indirect,
+  // so we allow both type checkers to match. The instruction definition
+  // determines which encoding is used.
+  bool isIndirectAddr16() const {
+    return Kind == k_IndirectAddr || Kind == k_IndirectDP;
+  }
+  bool isIndirectXAddr16() const {
+    return Kind == k_IndirectXAddr || Kind == k_IndexedIndirectDP;
+  }
+  bool isIndirectLongAddr16() const {
+    return Kind == k_IndirectLongAddr || Kind == k_IndirectDPLong;
+  }
+  bool isIndirectDP() const { return Kind == k_IndirectDP; }
+  bool isIndirectDPY() const { return Kind == k_IndirectDPY; }
+  bool isIndexedIndirectDP() const { return Kind == k_IndexedIndirectDP; }
+  bool isIndirectDPLong() const { return Kind == k_IndirectDPLong; }
+  bool isIndirectDPLongY() const { return Kind == k_IndirectDPLongY; }
+  bool isStackRelIndirectY() const { return Kind == k_StackRelIndirectY; }
 
   void print(raw_ostream &OS, const MCAsmInfo &MAI) const override {
     switch (Kind) {
@@ -141,6 +175,51 @@ public:
     case k_Immediate:
       OS << "Imm: ";
       MAI.printExpr(OS, *getImm());
+      break;
+    case k_IndirectAddr:
+      OS << "IndirectAddr: (";
+      MAI.printExpr(OS, *getImm());
+      OS << ")";
+      break;
+    case k_IndirectXAddr:
+      OS << "IndirectXAddr: (";
+      MAI.printExpr(OS, *getImm());
+      OS << ",x)";
+      break;
+    case k_IndirectLongAddr:
+      OS << "IndirectLongAddr: [";
+      MAI.printExpr(OS, *getImm());
+      OS << "]";
+      break;
+    case k_IndirectDP:
+      OS << "IndirectDP: (";
+      MAI.printExpr(OS, *getImm());
+      OS << ")";
+      break;
+    case k_IndirectDPY:
+      OS << "IndirectDPY: (";
+      MAI.printExpr(OS, *getImm());
+      OS << "),y";
+      break;
+    case k_IndexedIndirectDP:
+      OS << "IndexedIndirectDP: (";
+      MAI.printExpr(OS, *getImm());
+      OS << ",x)";
+      break;
+    case k_IndirectDPLong:
+      OS << "IndirectDPLong: [";
+      MAI.printExpr(OS, *getImm());
+      OS << "]";
+      break;
+    case k_IndirectDPLongY:
+      OS << "IndirectDPLongY: [";
+      MAI.printExpr(OS, *getImm());
+      OS << "],y";
+      break;
+    case k_StackRelIndirectY:
+      OS << "StackRelIndirectY: (";
+      MAI.printExpr(OS, *getImm());
+      OS << ",s),y";
       break;
     }
   }
@@ -157,6 +236,35 @@ public:
       Inst.addOperand(MCOperand::createImm(CE->getValue()));
     else
       Inst.addOperand(MCOperand::createExpr(Expr));
+  }
+
+  // All indirect modes store their address in Imm.Val
+  void addIndirectAddr16Operands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
+  }
+  void addIndirectXAddr16Operands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
+  }
+  void addIndirectLongAddr16Operands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
+  }
+  void addIndirectDPOperands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
+  }
+  void addIndirectDPYOperands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
+  }
+  void addIndexedIndirectDPOperands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
+  }
+  void addIndirectDPLongOperands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
+  }
+  void addIndirectDPLongYOperands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
+  }
+  void addStackRelIndirectYOperands(MCInst &Inst, unsigned N) const {
+    addImmOperands(Inst, N);
   }
 
   static std::unique_ptr<W65816Operand> createToken(StringRef Str, SMLoc S) {
@@ -180,6 +288,17 @@ public:
   static std::unique_ptr<W65816Operand> createImm(const MCExpr *Val, SMLoc S,
                                                    SMLoc E) {
     auto Op = std::make_unique<W65816Operand>(k_Immediate);
+    Op->Imm.Val = Val;
+    Op->StartLoc = S;
+    Op->EndLoc = E;
+    return Op;
+  }
+
+
+  static std::unique_ptr<W65816Operand> createIndirect(KindTy Kind,
+                                                        const MCExpr *Val,
+                                                        SMLoc S, SMLoc E) {
+    auto Op = std::make_unique<W65816Operand>(Kind);
     Op->Imm.Val = Val;
     Op->StartLoc = S;
     Op->EndLoc = E;
@@ -211,9 +330,11 @@ class W65816AsmParser : public MCTargetAsmParser {
 
   bool parseOperand(OperandVector &Operands);
   bool parseImmediate(OperandVector &Operands);
+  bool parseParenExpr(OperandVector &Operands);
+  bool parseBracketExpr(OperandVector &Operands);
   MCRegister matchRegisterName(StringRef Name);
 
-  // Indirect addressing mode parsers (called by AsmMatcher)
+  // Indirect addressing mode parsers (called by AsmMatcher for custom operands)
   ParseStatus parseIndirectAddr(OperandVector &Operands);
   ParseStatus parseIndirectXAddr(OperandVector &Operands);
   ParseStatus parseIndirectLongAddr(OperandVector &Operands);
@@ -287,17 +408,168 @@ ParseStatus W65816AsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
 bool W65816AsmParser::parseImmediate(OperandVector &Operands) {
   SMLoc S = getLexer().getLoc();
 
-  // Check for '#' prefix (immediate mode indicator)
-  if (getLexer().is(AsmToken::Hash)) {
-    getLexer().Lex(); // Eat '#'
-  }
+  // Expect '#' prefix for immediate mode - emit as a token
+  if (getLexer().isNot(AsmToken::Hash))
+    return true;
+  Operands.push_back(W65816Operand::createToken("#", S));
+  getLexer().Lex(); // Eat '#'
 
+  // Parse the immediate value
   const MCExpr *Expr;
   if (getParser().parseExpression(Expr))
     return true;
 
   SMLoc E = getLexer().getLoc();
   Operands.push_back(W65816Operand::createImm(Expr, S, E));
+  return false;
+}
+
+/// Parse parenthesized expression - handles various indirect modes
+/// Syntax: (expr) or (expr),y or (expr,x) or (expr,s),y
+bool W65816AsmParser::parseParenExpr(OperandVector &Operands) {
+  SMLoc S = getLexer().getLoc();
+
+  // Expect '('
+  if (getLexer().isNot(AsmToken::LParen))
+    return true;
+  getLexer().Lex(); // Eat '('
+
+  // Parse the expression
+  const MCExpr *Expr;
+  if (getParser().parseExpression(Expr))
+    return true;
+
+  // Check what follows the expression
+  if (getLexer().is(AsmToken::Comma)) {
+    getLexer().Lex(); // Eat ','
+
+    // Check for register (x or s)
+    if (getLexer().isNot(AsmToken::Identifier))
+      return Error(getLexer().getLoc(), "expected register after ','");
+
+    std::string RegNameStr = getLexer().getTok().getString().upper();
+    StringRef RegName = RegNameStr;
+
+    if (RegName == "X") {
+      // (expr,x) - Indexed indirect
+      getLexer().Lex(); // Eat 'x'
+
+      if (getLexer().isNot(AsmToken::RParen))
+        return Error(getLexer().getLoc(), "expected ')' after ',x'");
+      getLexer().Lex(); // Eat ')'
+
+      SMLoc E = getLexer().getLoc();
+      Operands.push_back(W65816Operand::createIndirect(
+          W65816Operand::k_IndexedIndirectDP, Expr, S, E));
+      return false;
+    }
+
+    if (RegName == "S") {
+      // (expr,s) - Stack relative, might be (expr,s),y
+      getLexer().Lex(); // Eat 's'
+
+      if (getLexer().isNot(AsmToken::RParen))
+        return Error(getLexer().getLoc(), "expected ')' after ',s'");
+      getLexer().Lex(); // Eat ')'
+
+      // Check for ,y suffix
+      if (getLexer().is(AsmToken::Comma)) {
+        getLexer().Lex(); // Eat ','
+
+        if (getLexer().isNot(AsmToken::Identifier))
+          return Error(getLexer().getLoc(), "expected 'y' after ','");
+
+        if (getLexer().getTok().getString().upper() != "Y")
+          return Error(getLexer().getLoc(), "expected 'y' register");
+
+        getLexer().Lex(); // Eat 'y'
+
+        SMLoc E = getLexer().getLoc();
+        Operands.push_back(W65816Operand::createIndirect(
+            W65816Operand::k_StackRelIndirectY, Expr, S, E));
+        return false;
+      }
+
+      // Plain (expr,s) without ,y - not a standard mode, treat as error
+      return Error(getLexer().getLoc(), "stack relative indirect requires ',y' suffix");
+    }
+
+    return Error(getLexer().getLoc(), "expected 'x' or 's' register");
+  }
+
+  // Expect ')'
+  if (getLexer().isNot(AsmToken::RParen))
+    return Error(getLexer().getLoc(), "expected ')' or ','");
+  getLexer().Lex(); // Eat ')'
+
+  // Check for ,y suffix: (expr),y
+  if (getLexer().is(AsmToken::Comma)) {
+    getLexer().Lex(); // Eat ','
+
+    if (getLexer().isNot(AsmToken::Identifier))
+      return Error(getLexer().getLoc(), "expected 'y' after ','");
+
+    if (getLexer().getTok().getString().upper() != "Y")
+      return Error(getLexer().getLoc(), "expected 'y' register");
+
+    getLexer().Lex(); // Eat 'y'
+
+    SMLoc E = getLexer().getLoc();
+    Operands.push_back(W65816Operand::createIndirect(
+        W65816Operand::k_IndirectDPY, Expr, S, E));
+    return false;
+  }
+
+  // Plain (expr) - could be indirect DP or indirect addr (JMP)
+  SMLoc E = getLexer().getLoc();
+  // Use IndirectDP for now - the AsmMatcher will validate size
+  Operands.push_back(W65816Operand::createIndirect(
+      W65816Operand::k_IndirectDP, Expr, S, E));
+  return false;
+}
+
+/// Parse bracketed expression - handles indirect long modes
+/// Syntax: [expr] or [expr],y
+bool W65816AsmParser::parseBracketExpr(OperandVector &Operands) {
+  SMLoc S = getLexer().getLoc();
+
+  // Expect '['
+  if (getLexer().isNot(AsmToken::LBrac))
+    return true;
+  getLexer().Lex(); // Eat '['
+
+  // Parse the expression
+  const MCExpr *Expr;
+  if (getParser().parseExpression(Expr))
+    return true;
+
+  // Expect ']'
+  if (getLexer().isNot(AsmToken::RBrac))
+    return Error(getLexer().getLoc(), "expected ']'");
+  getLexer().Lex(); // Eat ']'
+
+  // Check for ,y suffix: [expr],y
+  if (getLexer().is(AsmToken::Comma)) {
+    getLexer().Lex(); // Eat ','
+
+    if (getLexer().isNot(AsmToken::Identifier))
+      return Error(getLexer().getLoc(), "expected 'y' after ','");
+
+    if (getLexer().getTok().getString().upper() != "Y")
+      return Error(getLexer().getLoc(), "expected 'y' register");
+
+    getLexer().Lex(); // Eat 'y'
+
+    SMLoc E = getLexer().getLoc();
+    Operands.push_back(W65816Operand::createIndirect(
+        W65816Operand::k_IndirectDPLongY, Expr, S, E));
+    return false;
+  }
+
+  // Plain [expr] - indirect long
+  SMLoc E = getLexer().getLoc();
+  Operands.push_back(W65816Operand::createIndirect(
+      W65816Operand::k_IndirectDPLong, Expr, S, E));
   return false;
 }
 
@@ -313,9 +585,19 @@ bool W65816AsmParser::parseOperand(OperandVector &Operands) {
     return false;
   }
 
-  // Try to parse as immediate (with optional # prefix)
+  // Try to parse as immediate (with # prefix)
   if (getLexer().is(AsmToken::Hash)) {
     return parseImmediate(Operands);
+  }
+
+  // Try to parse indirect addressing modes
+  if (getLexer().is(AsmToken::LParen)) {
+    return parseParenExpr(Operands);
+  }
+
+  // Try to parse indirect long modes
+  if (getLexer().is(AsmToken::LBrac)) {
+    return parseBracketExpr(Operands);
   }
 
   // Otherwise parse as expression (address operand)
@@ -341,6 +623,7 @@ bool W65816AsmParser::parseInstruction(ParseInstructionInfo &Info,
       return true;
 
     // Parse subsequent operands separated by comma
+    // Note: for indirect modes like (dp),y the comma is already consumed
     while (getLexer().is(AsmToken::Comma)) {
       getLexer().Lex(); // Eat comma
 
@@ -400,52 +683,48 @@ ParseStatus W65816AsmParser::parseDirective(AsmToken DirectiveID) {
 }
 
 //===----------------------------------------------------------------------===//
-// Indirect Addressing Mode Parsers
-// These are called by the generated AsmMatcher when trying to match operands
+// Custom Operand Parsers for AsmMatcher
+// These are called by the generated AsmMatcher as fallback parsers
 //===----------------------------------------------------------------------===//
 
-// Parse (addr) - Indirect 16-bit address
+// These parsers are called by MatchInstructionImpl when it needs to try
+// parsing a specific operand type. Since we handle all indirect modes in
+// parseOperand(), these can just return NoMatch to indicate the operand
+// was already parsed (or doesn't match).
+
 ParseStatus W65816AsmParser::parseIndirectAddr(OperandVector &Operands) {
-  // Not implemented yet - indirect modes require more complex parsing
+  // Already handled in parseOperand()
   return ParseStatus::NoMatch;
 }
 
-// Parse (addr,x) - Indexed Indirect 16-bit address
 ParseStatus W65816AsmParser::parseIndirectXAddr(OperandVector &Operands) {
   return ParseStatus::NoMatch;
 }
 
-// Parse [addr] - Indirect Long 16-bit address
 ParseStatus W65816AsmParser::parseIndirectLongAddr(OperandVector &Operands) {
   return ParseStatus::NoMatch;
 }
 
-// Parse (dp) - Indirect Direct Page
 ParseStatus W65816AsmParser::parseIndirectDP(OperandVector &Operands) {
   return ParseStatus::NoMatch;
 }
 
-// Parse (dp),y - Indirect Direct Page Indexed Y
 ParseStatus W65816AsmParser::parseIndirectDPY(OperandVector &Operands) {
   return ParseStatus::NoMatch;
 }
 
-// Parse (dp,x) - Indexed Indirect Direct Page
 ParseStatus W65816AsmParser::parseIndexedIndirectDP(OperandVector &Operands) {
   return ParseStatus::NoMatch;
 }
 
-// Parse [dp] - Indirect Long Direct Page
 ParseStatus W65816AsmParser::parseIndirectDPLong(OperandVector &Operands) {
   return ParseStatus::NoMatch;
 }
 
-// Parse [dp],y - Indirect Long Direct Page Indexed Y
 ParseStatus W65816AsmParser::parseIndirectDPLongY(OperandVector &Operands) {
   return ParseStatus::NoMatch;
 }
 
-// Parse (offset,s),y - Stack Relative Indirect Indexed Y
 ParseStatus W65816AsmParser::parseStackRelIndirectY(OperandVector &Operands) {
   return ParseStatus::NoMatch;
 }

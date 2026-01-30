@@ -83,3 +83,33 @@ define i16 @select_sge(i16 %a, i16 %b, i16 %c) {
   %result = select i1 %cmp, i16 %a, i16 %c
   ret i16 %result
 }
+
+;===----------------------------------------------------------------------===
+; Unsigned Greater/Less or Equal (compound flag conditions)
+;===----------------------------------------------------------------------===
+
+; Test unsigned greater than (SETUGT) - requires C=1 AND Z=0
+; After comparison (via SBC): C=1 means A >= B, Z=0 means A != B, so C=1 AND Z=0 means A > B
+; CHECK-LABEL: test_select_ugt:
+; CHECK: sbc
+; CHECK: beq
+; CHECK: bcs
+; CHECK: rts
+define i16 @test_select_ugt(i16 %a, i16 %b, i16 %c) {
+  %cmp = icmp ugt i16 %a, %b
+  %result = select i1 %cmp, i16 %a, i16 %c
+  ret i16 %result
+}
+
+; Test unsigned less or equal (SETULE) - requires C=0 OR Z=1
+; After comparison (via SBC): C=0 means A < B, Z=1 means A == B, so C=0 OR Z=1 means A <= B
+; CHECK-LABEL: test_select_ule:
+; CHECK: sbc
+; CHECK: beq
+; CHECK: bcc
+; CHECK: rts
+define i16 @test_select_ule(i16 %a, i16 %b, i16 %c) {
+  %cmp = icmp ule i16 %a, %b
+  %result = select i1 %cmp, i16 %a, i16 %c
+  ret i16 %result
+}

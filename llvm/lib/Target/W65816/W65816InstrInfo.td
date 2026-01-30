@@ -423,7 +423,7 @@ def STA_dpX : W65816Inst16<0x95, (outs), (ins ACC16:$src, addr8dp:$imm),
 // Indirect Addressing Modes
 //===----------------------------------------------------------------------===//
 
-let Defs = [P] in {
+let Defs = [P], mayLoad = 1 in {
   // LDA (dp) - Load from address stored at direct page location
   def LDA_dpInd : W65816Inst16<0xB2, (outs ACC16:$dst), (ins inddp:$imm),
                                "lda\t$imm", []>;
@@ -441,20 +441,22 @@ let Defs = [P] in {
   }
 }
 
-// STA (dp) - Store to address stored at direct page location
-def STA_dpInd : W65816Inst16<0x92, (outs), (ins ACC16:$src, inddp:$imm),
-                             "sta\t$imm", []>;
+let mayStore = 1 in {
+  // STA (dp) - Store to address stored at direct page location
+  def STA_dpInd : W65816Inst16<0x92, (outs), (ins ACC16:$src, inddp:$imm),
+                               "sta\t$imm", []>;
 
-// STA (dp),Y - Store to (address at dp) + Y
-def STA_dpIndY : W65816Inst16<0x91, (outs), (ins ACC16:$src, inddpY:$imm),
-                              "sta\t$imm", []> {
-  let Uses = [Y];
-}
+  // STA (dp),Y - Store to (address at dp) + Y
+  def STA_dpIndY : W65816Inst16<0x91, (outs), (ins ACC16:$src, inddpY:$imm),
+                                "sta\t$imm", []> {
+    let Uses = [Y];
+  }
 
-// STA (dp,X) - Store to address at (dp + X)
-def STA_dpXInd : W65816Inst16<0x81, (outs), (ins ACC16:$src, indXdp:$imm),
-                              "sta\t$imm", []> {
-  let Uses = [X];
+  // STA (dp,X) - Store to address at (dp + X)
+  def STA_dpXInd : W65816Inst16<0x81, (outs), (ins ACC16:$src, indXdp:$imm),
+                                "sta\t$imm", []> {
+    let Uses = [X];
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -1613,6 +1615,13 @@ let Uses = [P] in {
   def Select16_SLE : Pseudo<(outs GPR16:$dst),
                             (ins GPR16:$trueVal, GPR16:$falseVal),
                             "# Select16_SLE $dst, $trueVal, $falseVal", []>;
+  // Unsigned compound comparisons (require multi-instruction sequences)
+  def Select16_UGT : Pseudo<(outs GPR16:$dst),
+                            (ins GPR16:$trueVal, GPR16:$falseVal),
+                            "# Select16_UGT $dst, $trueVal, $falseVal", []>;
+  def Select16_ULE : Pseudo<(outs GPR16:$dst),
+                            (ins GPR16:$trueVal, GPR16:$falseVal),
+                            "# Select16_ULE $dst, $trueVal, $falseVal", []>;
 }
 
 // Compare two registers pseudo - sets flags for subsequent branch
@@ -1768,6 +1777,30 @@ let Defs = [A, Y, P], mayLoad = 1, mayStore = 1, hasSideEffects = 0 in {
   def STAindirectIdx : Pseudo<(outs),
                               (ins GPR16:$val, i32imm:$stack_slot, GPR16:$ptr, GPR16:$idx),
                               "# STAindirectIdx $val, [$stack_slot], $ptr, $idx", []>;
+}
+
+//===----------------------------------------------------------------------===//
+// Direct Page Indirect Pseudo Instructions
+// These provide efficient access through pointers stored in direct page
+//===----------------------------------------------------------------------===//
+
+// Load through DP pointer with index: LDA ($dp),Y
+// dp_addr: direct page address containing the pointer
+// idx: byte offset to add (will be moved to Y)
+let Defs = [A, Y, P], mayLoad = 1, hasSideEffects = 0 in {
+  def LDAindexedDPY : Pseudo<(outs GPR16:$dst),
+                             (ins imm8:$dp_addr, GPR16:$idx),
+                             "# LDAindexedDPY $dst, ($dp_addr), $idx", []>;
+}
+
+// Store through DP pointer with index: STA ($dp),Y
+// val: value to store
+// dp_addr: direct page address containing the pointer
+// idx: byte offset to add (will be moved to Y)
+let Defs = [A, Y, P], mayStore = 1, hasSideEffects = 0 in {
+  def STAindexedDPY : Pseudo<(outs),
+                             (ins GPR16:$val, imm8:$dp_addr, GPR16:$idx),
+                             "# STAindexedDPY $val, ($dp_addr), $idx", []>;
 }
 
 //===----------------------------------------------------------------------===//

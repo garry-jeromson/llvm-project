@@ -245,6 +245,9 @@ enum CondCode {
   COND_SGE,     // Signed greater or equal (N == V)
   COND_SGT,     // Signed greater than (Z == 0 && N == V)
   COND_SLE,     // Signed less or equal (Z == 1 || N != V)
+  // Unsigned compound comparisons (require multi-instruction sequences)
+  COND_UGT,     // Unsigned greater than (C == 1 && Z == 0)
+  COND_ULE,     // Unsigned less or equal (C == 0 || Z == 1)
 };
 }
 
@@ -265,12 +268,10 @@ static W65816CC::CondCode getCondCodeForISD(ISD::CondCode CC) {
     return W65816CC::COND_CS;  // Carry set (A >= B unsigned)
   case ISD::SETUGT:
     // For A > B unsigned: need C=1 (A >= B) AND Z=0 (A != B)
-    // After CMP, BEQ not_taken, then BCS taken
-    // Simplified: use BNE after checking BCS condition
-    return W65816CC::COND_NE;  // TODO: proper UGT sequence
+    return W65816CC::COND_UGT;
   case ISD::SETULE:
     // For A <= B unsigned: C=0 (A < B) OR Z=1 (A == B)
-    return W65816CC::COND_EQ;  // TODO: proper ULE sequence
+    return W65816CC::COND_ULE;
   // Signed comparisons (require multi-instruction sequences)
   case ISD::SETLT:
     return W65816CC::COND_SLT;  // N != V
@@ -306,6 +307,11 @@ static unsigned getBranchOpcodeForCond(W65816CC::CondCode CC) {
   case W65816CC::COND_SGT:
   case W65816CC::COND_SLE:
     // Fallback - these should be handled specially by EmitInstrWithCustomInserter
+    return W65816::BNE;
+  // Unsigned compound conditions require multi-instruction sequences
+  case W65816CC::COND_UGT:
+  case W65816CC::COND_ULE:
+    // Fallback - these should be handled specially by pseudo expansion
     return W65816::BNE;
   }
   llvm_unreachable("Unknown condition code");
@@ -567,22 +573,24 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   Register FalseReg = MI.getOperand(2).getReg();
   W65816CC::CondCode CondCode = (W65816CC::CondCode)MI.getOperand(3).getImm();
 
-  // Handle signed conditions by emitting a signed select pseudo
+  // Handle signed and unsigned compound conditions by emitting select pseudos
   // These pseudos are expanded later (in ExpandPseudo pass) to avoid
   // the branch folder breaking the multi-instruction sequences
-  unsigned SignedSelectOpc = 0;
+  unsigned CompoundSelectOpc = 0;
   switch (CondCode) {
-  case W65816CC::COND_SLT: SignedSelectOpc = W65816::Select16_SLT; break;
-  case W65816CC::COND_SGE: SignedSelectOpc = W65816::Select16_SGE; break;
-  case W65816CC::COND_SGT: SignedSelectOpc = W65816::Select16_SGT; break;
-  case W65816CC::COND_SLE: SignedSelectOpc = W65816::Select16_SLE; break;
+  case W65816CC::COND_SLT: CompoundSelectOpc = W65816::Select16_SLT; break;
+  case W65816CC::COND_SGE: CompoundSelectOpc = W65816::Select16_SGE; break;
+  case W65816CC::COND_SGT: CompoundSelectOpc = W65816::Select16_SGT; break;
+  case W65816CC::COND_SLE: CompoundSelectOpc = W65816::Select16_SLE; break;
+  case W65816CC::COND_UGT: CompoundSelectOpc = W65816::Select16_UGT; break;
+  case W65816CC::COND_ULE: CompoundSelectOpc = W65816::Select16_ULE; break;
   default: break;
   }
 
-  if (SignedSelectOpc) {
-    // For signed conditions, emit a pseudo that will be expanded later
+  if (CompoundSelectOpc) {
+    // For compound conditions, emit a pseudo that will be expanded later
     // Don't create the diamond pattern here - let ExpandPseudo handle it
-    BuildMI(*MBB, MI, DL, TII.get(SignedSelectOpc), DstReg)
+    BuildMI(*MBB, MI, DL, TII.get(CompoundSelectOpc), DstReg)
         .addReg(TrueReg)
         .addReg(FalseReg);
     MI.eraseFromParent();

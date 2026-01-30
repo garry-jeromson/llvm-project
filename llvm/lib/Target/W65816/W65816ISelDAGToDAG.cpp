@@ -390,6 +390,51 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
+      // Check for DP indirect indexed Y store: (store val, (add (load (wrapper GA_dp)), offset))
+      // This is ptr[i] = val where ptr is stored in direct page.
+      // We can use STA ($dp),Y instead of stack-relative indirect.
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check for (add (load (wrapper GA_dp)), offset)
+        SDValue PtrSrc;
+        SDValue Offset;
+        if (LHS.getOpcode() == ISD::LOAD) {
+          PtrSrc = LHS;
+          Offset = RHS;
+        } else if (RHS.getOpcode() == ISD::LOAD) {
+          PtrSrc = RHS;
+          Offset = LHS;
+        }
+
+        if (PtrSrc.getNode()) {
+          LoadSDNode *PtrLoad = cast<LoadSDNode>(PtrSrc.getNode());
+          SDValue PtrAddr = PtrLoad->getBasePtr();
+
+          if (PtrAddr.getOpcode() == W65816ISD::WRAPPER) {
+            SDValue Inner = PtrAddr.getOperand(0);
+            if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+              if (isDirectPageGlobal(GA->getGlobal())) {
+                // Use DP indirect indexed Y: STA ($dp),Y
+                SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                    GA->getGlobal(), DL, MVT::i8, GA->getOffset());
+
+                // Use STAindexedDPY pseudo which handles moving offset to Y
+                SDValue PtrChain = PtrLoad->getChain();
+                SDValue Ops[] = {Value, TargetAddr, Offset, PtrChain};
+                MachineSDNode *Store =
+                    CurDAG->getMachineNode(W65816::STAindexedDPY, DL, MVT::Other, Ops);
+
+                CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+                ReplaceNode(N, Store);
+                return;
+              }
+            }
+          }
+        }
+      }
+
       // Check for indexed pointer store: (store val, (add ptr, offset))
       // where ptr is a register and offset is computed
       if (Addr.getOpcode() == ISD::ADD) {
@@ -416,6 +461,36 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
           ReplaceNode(N, Store);
           return;
+        }
+      }
+
+      // Check for DP indirect store: (store val, (load (wrapper GA_dp)))
+      // This is storing through a pointer that's in direct page.
+      // We can use STA ($dp) instead of stack-relative indirect.
+      if (Addr.getOpcode() == ISD::LOAD) {
+        LoadSDNode *PtrLoad = cast<LoadSDNode>(Addr.getNode());
+        SDValue PtrAddr = PtrLoad->getBasePtr();
+
+        // Check if the pointer is loaded from a direct page global
+        if (PtrAddr.getOpcode() == W65816ISD::WRAPPER) {
+          SDValue Inner = PtrAddr.getOperand(0);
+          if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+            if (isDirectPageGlobal(GA->getGlobal())) {
+              // Use DP indirect: STA ($dp)
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i8, GA->getOffset());
+
+              // Chain through the pointer load
+              SDValue PtrChain = PtrLoad->getChain();
+              SDValue Ops[] = {Value, TargetAddr, PtrChain};
+              MachineSDNode *Store =
+                  CurDAG->getMachineNode(W65816::STA_dpInd, DL, MVT::Other, Ops);
+
+              CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+              ReplaceNode(N, Store);
+              return;
+            }
+          }
         }
       }
 
@@ -655,6 +730,53 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
+      // Check for DP indirect indexed Y: (load (add (load (wrapper GA_dp)), offset))
+      // This is ptr[i] where ptr is stored in direct page.
+      // We can use LDA ($dp),Y instead of stack-relative indirect.
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check for (add (load (wrapper GA_dp)), offset)
+        SDValue PtrSrc;
+        SDValue Offset;
+        if (LHS.getOpcode() == ISD::LOAD) {
+          PtrSrc = LHS;
+          Offset = RHS;
+        } else if (RHS.getOpcode() == ISD::LOAD) {
+          PtrSrc = RHS;
+          Offset = LHS;
+        }
+
+        if (PtrSrc.getNode()) {
+          LoadSDNode *PtrLoad = cast<LoadSDNode>(PtrSrc.getNode());
+          SDValue PtrAddr = PtrLoad->getBasePtr();
+
+          if (PtrAddr.getOpcode() == W65816ISD::WRAPPER) {
+            SDValue Inner = PtrAddr.getOperand(0);
+            if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+              if (isDirectPageGlobal(GA->getGlobal())) {
+                // Use DP indirect indexed Y: LDA ($dp),Y
+                SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                    GA->getGlobal(), DL, MVT::i8, GA->getOffset());
+
+                // Need to move offset to Y register first
+                // Use LDAindexedDPY pseudo which handles this
+                SDValue PtrChain = PtrLoad->getChain();
+                SDValue Ops[] = {TargetAddr, Offset, PtrChain};
+                SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+                MachineSDNode *Load =
+                    CurDAG->getMachineNode(W65816::LDAindexedDPY, DL, VTs, Ops);
+
+                CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+                ReplaceNode(N, Load);
+                return;
+              }
+            }
+          }
+        }
+      }
+
       // Check for indexed pointer access: (load (add ptr, offset))
       // where ptr is a register and offset is computed (e.g., i*2 for i16 arrays)
       // This handles ptr[i] where ptr is in a register
@@ -691,6 +813,37 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
           ReplaceNode(N, Load);
           return;
+        }
+      }
+
+      // Check for DP indirect: (load (load (wrapper GA_dp)))
+      // This is dereferencing a pointer stored in direct page.
+      // We can use LDA ($dp) instead of stack-relative indirect.
+      if (Addr.getOpcode() == ISD::LOAD) {
+        LoadSDNode *PtrLoad = cast<LoadSDNode>(Addr.getNode());
+        SDValue PtrAddr = PtrLoad->getBasePtr();
+
+        // Check if the pointer is loaded from a direct page global
+        if (PtrAddr.getOpcode() == W65816ISD::WRAPPER) {
+          SDValue Inner = PtrAddr.getOperand(0);
+          if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+            if (isDirectPageGlobal(GA->getGlobal())) {
+              // Use DP indirect: LDA ($dp)
+              SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+                  GA->getGlobal(), DL, MVT::i8, GA->getOffset());
+
+              // The outer load depends on the pointer load completing
+              SDValue PtrChain = PtrLoad->getChain();
+              SDValue Ops[] = {TargetAddr, PtrChain};
+              SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+              MachineSDNode *Load =
+                  CurDAG->getMachineNode(W65816::LDA_dpInd, DL, VTs, Ops);
+
+              CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+              ReplaceNode(N, Load);
+              return;
+            }
+          }
         }
       }
 
