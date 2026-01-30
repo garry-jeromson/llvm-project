@@ -968,7 +968,8 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
   DebugLoc DL = MI.getDebugLoc();
 
   // AND16rr $dst, $src1, $src2
-  // Expand to: get src1 to A, push src2, AND from stack, pull to restore stack
+  // Optimized: use Direct Page scratch location at $FE for faster access.
+  // STX/STY to DP + AND from DP (8 cycles) is faster than PHX/AND_sr/PLX (12 cycles).
 
   Register DstReg = MI.getOperand(0).getReg();
   Register Src1Reg = MI.getOperand(1).getReg();
@@ -981,26 +982,26 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TYA);
   }
 
-  // AND src2 using stack-relative addressing
+  // AND src2 using Direct Page scratch location
   if (Src2Reg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::PHX);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_sr), W65816::A)
-        .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLX);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+        .addReg(W65816::X)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::PHY);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_sr), W65816::A)
-        .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLY);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+        .addReg(W65816::Y)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::A) {
-    // AND A with itself is A
-    buildMI(MBB, MBBI, W65816::PHA);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_sr), W65816::A)
+    // AND A with itself is A - store A to DP scratch, AND from DP
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLA);
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   }
 
   // Move result to destination if needed
@@ -1019,7 +1020,8 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
   DebugLoc DL = MI.getDebugLoc();
 
   // OR16rr $dst, $src1, $src2
-  // Expand to: get src1 to A, push src2, ORA from stack, pull to restore stack
+  // Optimized: use Direct Page scratch location at $FE for faster access.
+  // STX/STY to DP + ORA from DP (8 cycles) is faster than PHX/ORA_sr/PLX (12 cycles).
 
   Register DstReg = MI.getOperand(0).getReg();
   Register Src1Reg = MI.getOperand(1).getReg();
@@ -1032,26 +1034,26 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TYA);
   }
 
-  // ORA src2 using stack-relative addressing
+  // ORA src2 using Direct Page scratch location
   if (Src2Reg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::PHX);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_sr), W65816::A)
-        .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLX);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+        .addReg(W65816::X)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::PHY);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_sr), W65816::A)
-        .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLY);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+        .addReg(W65816::Y)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::A) {
-    // OR A with itself is A
-    buildMI(MBB, MBBI, W65816::PHA);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_sr), W65816::A)
+    // OR A with itself is A - store A to DP scratch, ORA from DP
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLA);
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   }
 
   // Move result to destination if needed
@@ -1070,7 +1072,8 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
   DebugLoc DL = MI.getDebugLoc();
 
   // XOR16rr $dst, $src1, $src2
-  // Expand to: get src1 to A, push src2, EOR from stack, pull to restore stack
+  // Optimized: use Direct Page scratch location at $FE for faster access.
+  // STX/STY to DP + EOR from DP (8 cycles) is faster than PHX/EOR_sr/PLX (12 cycles).
 
   Register DstReg = MI.getOperand(0).getReg();
   Register Src1Reg = MI.getOperand(1).getReg();
@@ -1083,26 +1086,26 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TYA);
   }
 
-  // EOR src2 using stack-relative addressing
+  // EOR src2 using Direct Page scratch location
   if (Src2Reg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::PHX);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_sr), W65816::A)
-        .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLX);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+        .addReg(W65816::X)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::PHY);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_sr), W65816::A)
-        .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLY);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+        .addReg(W65816::Y)
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::A) {
-    // XOR A with itself is 0
-    buildMI(MBB, MBBI, W65816::PHA);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_sr), W65816::A)
+    // XOR A with itself is 0 - store A to DP scratch, EOR from DP
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
-        .addImm(1);
-    buildMI(MBB, MBBI, W65816::PLA);
+        .addImm(SCRATCH_DP_ADDR);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_dp), W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
   }
 
   // Move result to destination if needed

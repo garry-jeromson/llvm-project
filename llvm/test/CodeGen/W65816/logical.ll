@@ -17,7 +17,9 @@ define i16 @and_imm(i16 %a) {
 }
 
 ; CHECK-LABEL: and_regs:
-; CHECK: and
+; Optimized: uses DP scratch at $00fe instead of stack (saves 4 cycles)
+; CHECK: stx $00fe
+; CHECK: and $00fe
 ; CHECK: rts
 define i16 @and_regs(i16 %a, i16 %b) {
   %r = and i16 %a, %b
@@ -37,7 +39,9 @@ define i16 @or_imm(i16 %a) {
 }
 
 ; CHECK-LABEL: or_regs:
-; CHECK: ora
+; Optimized: uses DP scratch at $00fe instead of stack (saves 4 cycles)
+; CHECK: stx $00fe
+; CHECK: ora $00fe
 ; CHECK: rts
 define i16 @or_regs(i16 %a, i16 %b) {
   %r = or i16 %a, %b
@@ -57,7 +61,9 @@ define i16 @xor_imm(i16 %a) {
 }
 
 ; CHECK-LABEL: xor_regs:
-; CHECK: eor
+; Optimized: uses DP scratch at $00fe instead of stack (saves 4 cycles)
+; CHECK: stx $00fe
+; CHECK: eor $00fe
 ; CHECK: rts
 define i16 @xor_regs(i16 %a, i16 %b) {
   %r = xor i16 %a, %b

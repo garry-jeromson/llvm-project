@@ -811,6 +811,20 @@ let Defs = [P] in {
                             "eor\t$imm,s", []> {
     let Constraints = "$src = $dst";
   }
+
+  // Direct Page versions for optimized register-to-register operations
+  // These are faster than stack-relative (4 cycles vs 5 cycles for DP vs SR)
+  def AND_dp : W65816Inst16<0x25, (outs ACC16:$dst),
+                            (ins addr8dp:$imm),
+                            "and\t$imm", []>;
+
+  def ORA_dp : W65816Inst16<0x05, (outs ACC16:$dst),
+                            (ins addr8dp:$imm),
+                            "ora\t$imm", []>;
+
+  def EOR_dp : W65816Inst16<0x45, (outs ACC16:$dst),
+                            (ins addr8dp:$imm),
+                            "eor\t$imm", []>;
 }
 
 //===----------------------------------------------------------------------===//
