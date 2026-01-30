@@ -288,10 +288,11 @@ def W65816brcond : SDNode<"W65816ISD::BRCOND", SDT_W65816BrCond,
 // LDA - Load Accumulator (16-bit)
 let Defs = [P], Predicates = [UseAcc16Bit] in {
   // LDA immediate 16-bit
-  // Note: operand name must match encoding field 'addr'
+  // Note: No pattern - use MOV16ri pseudo for constant materialization.
+  // This allows the register allocator to choose A, X, or Y freely.
+  // LDA_imm16 is used directly by pseudo-expansion when A is required.
   def LDA_imm16 : W65816Inst24<0xA9, (outs ACC16:$dst), (ins imm16:$addr),
-                               "lda\t#$addr",
-                               [(set ACC16:$dst, imm:$addr)]>;
+                               "lda\t#$addr", []>;
 
   // LDA absolute
   def LDA_abs : W65816Inst24<0xAD, (outs ACC16:$dst), (ins addr16:$addr),
@@ -360,6 +361,26 @@ let mayLoad = 1, hasSideEffects = 0, Defs = [P] in {
 let mayStore = 1, hasSideEffects = 0 in {
   def SPILL_GPR16 : Pseudo<(outs), (ins GPR16:$src, i16imm:$fi),
                            "# SPILL_GPR16 $src, $fi", []>;
+}
+
+// MOV16ri - Load immediate into any GPR16 register
+// Expanded to: LDA #imm, LDX #imm, or LDY #imm based on allocated register
+// This allows register allocation flexibility for phi nodes in loops.
+// Only used in 16-bit accumulator mode - in 8-bit mode, use MOV16ri_acc8.
+let Defs = [P], isAsCheapAsAMove = 1, isReMaterializable = 1,
+    Predicates = [UseAcc16Bit] in {
+  def MOV16ri : Pseudo<(outs GPR16:$dst), (ins imm16:$imm),
+                       "# MOV16ri $dst, $imm",
+                       [(set GPR16:$dst, imm:$imm)]>;
+}
+
+// MOV16ri_acc8 - Load immediate into X or Y (16-bit) in 8-bit accumulator mode
+// When accumulator is 8-bit, 16-bit values must use index registers.
+let Defs = [P], isAsCheapAsAMove = 1, isReMaterializable = 1,
+    Predicates = [UseAcc8Bit] in {
+  def MOV16ri_acc8 : Pseudo<(outs IDX16:$dst), (ins imm16:$imm),
+                            "# MOV16ri_acc8 $dst, $imm",
+                            [(set IDX16:$dst, imm:$imm)]>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1592,20 +1613,25 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
 // 16-bit add pseudo - will need to expand to CLC + ADC sequence
 // Output must be ACC16 (A register) since ADC always produces result in A.
 // The register allocator will insert copies if the result is needed elsewhere.
-let Defs = [P] in {
+let Defs = [P], Constraints = "$src1 = $dst" in {
   // These pseudos output to GPR16 to give the register allocator flexibility.
   // The expansion code handles moving the result from A to X/Y if needed.
+  // The two-address constraint ($src1 = $dst) tells the register allocator
+  // that the output must share a register with src1, reducing register pressure.
   def ADD16rr : Pseudo<(outs GPR16:$dst), (ins GPR16:$src1, GPR16:$src2),
                        "# ADD16rr",
                        [(set GPR16:$dst, (add GPR16:$src1, GPR16:$src2))]>;
 
-  def ADD16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$imm),
-                       "# ADD16ri",
-                       [(set GPR16:$dst, (add GPR16:$src, imm:$imm))]>;
-
   def SUB16rr : Pseudo<(outs GPR16:$dst), (ins GPR16:$src1, GPR16:$src2),
                        "# SUB16rr",
                        [(set GPR16:$dst, (sub GPR16:$src1, GPR16:$src2))]>;
+}
+
+let Defs = [P], Constraints = "$src = $dst" in {
+  // Immediate variants use $src instead of $src1
+  def ADD16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$imm),
+                       "# ADD16ri",
+                       [(set GPR16:$dst, (add GPR16:$src, imm:$imm))]>;
 
   def SUB16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$imm),
                        "# SUB16ri",
@@ -1742,7 +1768,9 @@ let Defs = [A, P] in {
 // These expand to push one operand to stack, perform operation via stack-relative,
 // then pull to restore stack.
 // Output must be ACC16 (A register) since AND/ORA/EOR always produce result in A.
-let Defs = [P] in {
+// The two-address constraint ($src1 = $dst) tells the register allocator
+// that the output must share a register with src1, reducing register pressure.
+let Defs = [P], Constraints = "$src1 = $dst" in {
   // These pseudos output to GPR16 to give the register allocator flexibility.
   // The expansion code handles moving the result from A to X/Y if needed.
   def AND16rr : Pseudo<(outs GPR16:$dst), (ins GPR16:$src1, GPR16:$src2),

@@ -117,6 +117,8 @@ private:
   bool expandSTAindirectIdx(Block &MBB, BlockIt MBBI);
   bool expandRELOAD_GPR16(Block &MBB, BlockIt MBBI);
   bool expandSPILL_GPR16(Block &MBB, BlockIt MBBI);
+  bool expandMOV16ri(Block &MBB, BlockIt MBBI);
+  bool expandMOV16ri_acc8(Block &MBB, BlockIt MBBI);
   bool expandINC16(Block &MBB, BlockIt MBBI);
   bool expandDEC16(Block &MBB, BlockIt MBBI);
   bool expandSelect16Signed(Block &MBB, BlockIt MBBI, unsigned CondCode);
@@ -237,6 +239,10 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandRELOAD_GPR16(MBB, MBBI);
   case W65816::SPILL_GPR16:
     return expandSPILL_GPR16(MBB, MBBI);
+  case W65816::MOV16ri:
+    return expandMOV16ri(MBB, MBBI);
+  case W65816::MOV16ri_acc8:
+    return expandMOV16ri_acc8(MBB, MBBI);
   case W65816::INC16:
     return expandINC16(MBB, MBBI);
   case W65816::DEC16:
@@ -613,24 +619,28 @@ bool W65816ExpandPseudo::expandCMP16ri(Block &MBB, BlockIt MBBI) {
   DebugLoc DL = MI.getDebugLoc();
 
   // CMP16ri $src, $imm
-  // Compare src with immediate by getting src to A and using CMP_imm16
-  // This is much more efficient than the register-register comparison
+  // Compare src with immediate using the appropriate compare instruction.
+  // Use CMP for A, CPX for X, CPY for Y to avoid clobbering other registers.
 
   Register SrcReg = MI.getOperand(0).getReg();
   int64_t Imm = MI.getOperand(1).getImm();
 
-  // Get src into A if not already there
-  if (SrcReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
+  if (SrcReg == W65816::A) {
+    // Use CMP_imm16 for A register
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
+        .addReg(W65816::A)
+        .addImm(Imm);
+  } else if (SrcReg == W65816::X) {
+    // Use CPX_imm16 for X register (doesn't clobber A)
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16))
+        .addImm(Imm);
   } else if (SrcReg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
+    // Use CPY_imm16 for Y register (doesn't clobber A)
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_imm16))
+        .addImm(Imm);
+  } else {
+    llvm_unreachable("CMP16ri with non-physical register");
   }
-
-  // Use CMP_imm16 which directly compares A with an immediate
-  // This sets all flags correctly (Z, N, C, V)
-  BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
-      .addReg(W65816::A)
-      .addImm(Imm);
 
   MI.eraseFromParent();
   return true;
@@ -2058,6 +2068,59 @@ bool W65816ExpandPseudo::expandSPILL_GPR16(Block &MBB, BlockIt MBBI) {
     StoreInst.addFrameIndex(FIOp.getIndex());
   } else {
     StoreInst.add(FIOp);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandMOV16ri(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // MOV16ri $dst, $imm
+  // Load immediate into any GPR16 register
+  // Expanded to: LDA #imm, LDX #imm, or LDY #imm based on allocated register
+
+  Register DstReg = MI.getOperand(0).getReg();
+  int64_t Imm = MI.getOperand(1).getImm();
+
+  if (DstReg == W65816::A) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A)
+        .addImm(Imm);
+  } else if (DstReg == W65816::X) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_imm16), W65816::X)
+        .addImm(Imm);
+  } else if (DstReg == W65816::Y) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
+        .addImm(Imm);
+  } else {
+    llvm_unreachable("MOV16ri with non-physical register");
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandMOV16ri_acc8(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // MOV16ri_acc8 $dst, $imm
+  // Load immediate into X or Y (16-bit) in 8-bit accumulator mode
+  // Expanded to: LDX #imm or LDY #imm based on allocated register
+
+  Register DstReg = MI.getOperand(0).getReg();
+  int64_t Imm = MI.getOperand(1).getImm();
+
+  if (DstReg == W65816::X) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_imm16), W65816::X)
+        .addImm(Imm);
+  } else if (DstReg == W65816::Y) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
+        .addImm(Imm);
+  } else {
+    llvm_unreachable("MOV16ri_acc8 with invalid register (must be X or Y)");
   }
 
   MI.eraseFromParent();
