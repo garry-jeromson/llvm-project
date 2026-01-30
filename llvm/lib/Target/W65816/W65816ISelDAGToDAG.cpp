@@ -1070,23 +1070,33 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
   }
 
   case W65816ISD::CALL: {
-    // Select W65816 call to JSR instruction
+    // Select W65816 call to JSR or JSL instruction
+    // JSL (Jump Subroutine Long) is used for far calls to functions with
+    // the "w65816_farfunc" attribute
     SDValue Chain = N->getOperand(0);
     SDValue Callee = N->getOperand(1);
 
-    // Handle different callee types
+    // Determine if this is a far call (JSL vs JSR)
+    bool IsFarCall = false;
     SDValue Target;
+
     if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
-      Target = CurDAG->getTargetGlobalAddress(G->getGlobal(), DL, MVT::i16,
-                                              G->getOffset());
+      const GlobalValue *GV = G->getGlobal();
+      // Check if callee function has w65816_farfunc attribute
+      if (const Function *F = dyn_cast<Function>(GV)) {
+        IsFarCall = F->hasFnAttribute("w65816_farfunc");
+      }
+      MVT AddrVT = IsFarCall ? MVT::i32 : MVT::i16;
+      Target = CurDAG->getTargetGlobalAddress(GV, DL, AddrVT, G->getOffset());
     } else if (ExternalSymbolSDNode *E = dyn_cast<ExternalSymbolSDNode>(Callee)) {
+      // External symbols - use 16-bit by default
       Target = CurDAG->getTargetExternalSymbol(E->getSymbol(), MVT::i16);
     } else {
       // Direct address
       Target = Callee;
     }
 
-    // Collect all operands for the JSR
+    // Collect all operands for the call
     SmallVector<SDValue, 8> Ops;
     Ops.push_back(Target);
     Ops.push_back(Chain);
@@ -1095,9 +1105,10 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     if (N->getGluedNode())
       Ops.push_back(N->getOperand(N->getNumOperands() - 1));
 
-    // Create the JSR node
+    // Create the JSR or JSL node
     SDVTList VTs = CurDAG->getVTList(MVT::Other, MVT::Glue);
-    MachineSDNode *Call = CurDAG->getMachineNode(W65816::JSR, DL, VTs, Ops);
+    unsigned Opcode = IsFarCall ? W65816::JSL : W65816::JSR;
+    MachineSDNode *Call = CurDAG->getMachineNode(Opcode, DL, VTs, Ops);
 
     ReplaceNode(N, Call);
     return;

@@ -44,6 +44,11 @@ class W65816MachineFunctionInfo : public MachineFunctionInfo {
   /// Enabled via the "w65816_dpframe" function attribute.
   bool UsesDPFrame = false;
 
+  /// Whether this function uses far/long calling convention (JSL/RTL).
+  /// When enabled, callers use JSL (24-bit) and the function returns with RTL.
+  /// Enabled via the "w65816_farfunc" function attribute.
+  bool IsFarFunction = false;
+
   /// Size of locals allocated in Direct Page (must be <= 256 bytes).
   unsigned DPFrameSize = 0;
 
@@ -68,6 +73,10 @@ public:
     // Check for Direct Page frame attribute
     // Usage: __attribute__((annotate("w65816_dpframe"))) or via IR attribute
     UsesDPFrame = F.hasFnAttribute("w65816_dpframe");
+
+    // Check for far function attribute (uses JSL/RTL instead of JSR/RTS)
+    // Usage: __attribute__((w65816_farfunc))
+    IsFarFunction = F.hasFnAttribute("w65816_farfunc");
   }
 
   MachineFunctionInfo *
@@ -93,6 +102,9 @@ public:
 
   /// Returns true if this function uses Direct Page for local allocation.
   bool usesDPFrame() const { return UsesDPFrame; }
+
+  /// Returns true if this function uses far/long calling convention (JSL/RTL).
+  bool isFarFunction() const { return IsFarFunction; }
 
   /// Get the size of locals allocated in Direct Page.
   unsigned getDPFrameSize() const { return DPFrameSize; }

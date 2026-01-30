@@ -287,11 +287,14 @@ bool W65816ExpandPseudo::expandRETW(Block &MBB, BlockIt MBBI) {
   const W65816MachineFunctionInfo *AFI =
       MF.getInfo<W65816MachineFunctionInfo>();
 
-  // For interrupt handlers, use RTI (Return from Interrupt)
-  // For normal functions, use RTS (Return from Subroutine)
-  // For long calls, this would be RTL instead
+  // Select return instruction:
+  // - RTI for interrupt handlers
+  // - RTL for far functions (called via JSL)
+  // - RTS for normal functions (called via JSR)
   if (AFI->isInterruptOrNMIHandler()) {
     buildMI(MBB, MBBI, W65816::RTI);
+  } else if (AFI->isFarFunction()) {
+    buildMI(MBB, MBBI, W65816::RTL);
   } else {
     buildMI(MBB, MBBI, W65816::RTS);
   }
