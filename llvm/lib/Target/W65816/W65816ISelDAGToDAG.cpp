@@ -1223,11 +1223,12 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     Ops.push_back(Target);
     Ops.push_back(Chain);
 
-    // Add any glue input
+    // Add glue input - connects the CopyToReg instructions for args
     if (N->getGluedNode())
       Ops.push_back(N->getOperand(N->getNumOperands() - 1));
 
     // Create the JSR or JSL node
+    // Note: JSR/JSL Defs specify caller-saved registers (A, X, Y, P, SP)
     SDVTList VTs = CurDAG->getVTList(MVT::Other, MVT::Glue);
     unsigned Opcode = IsFarCall ? W65816::JSL : W65816::JSR;
     MachineSDNode *Call = CurDAG->getMachineNode(Opcode, DL, VTs, Ops);

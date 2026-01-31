@@ -905,6 +905,9 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   CallingConv::ID CallConv = CLI.CallConv;
   bool IsVarArg = CLI.IsVarArg;
 
+  // W65816 does not support tail call optimization
+  CLI.IsTailCall = false;
+
   MachineFunction &MF = DAG.getMachineFunction();
 
   // Analyze operands of the call
