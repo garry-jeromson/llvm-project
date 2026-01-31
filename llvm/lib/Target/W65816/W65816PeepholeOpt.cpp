@@ -21,6 +21,8 @@
 // 3. Eliminating redundant flag operations:
 //    - CLC; CLC -> CLC (remove duplicate)
 //    - SEC; SEC -> SEC (remove duplicate)
+//    - SEC; CLC -> CLC (first is cancelled by second)
+//    - CLC; SEC -> SEC (first is cancelled by second)
 //
 // 4. Eliminating redundant push/pop pairs:
 //    - PHA; PLA -> (delete both, value stays in A)
@@ -86,6 +88,13 @@ static bool isDuplicateFlagOp(unsigned First, unsigned Second) {
          (First == W65816::SEC && Second == W65816::SEC);
 }
 
+/// Check if two flag operations cancel each other out.
+/// SEC followed by CLC means the SEC was pointless (and vice versa).
+static bool isCancellingFlagOp(unsigned First, unsigned Second) {
+  return (First == W65816::SEC && Second == W65816::CLC) ||
+         (First == W65816::CLC && Second == W65816::SEC);
+}
+
 bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
   bool Modified = false;
 
@@ -133,6 +142,16 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
       LLVM_DEBUG(dbgs() << "Removing duplicate flag operation:\n  " << NextMI);
       MBB.erase(NextMBBI);
       // Don't advance MBBI - check if there are more duplicates
+      Modified = true;
+      continue;
+    }
+
+    // Check for cancelling flag operations (SEC/CLC, CLC/SEC)
+    // The first instruction is pointless since the second overwrites it
+    if (isCancellingFlagOp(Opcode, NextOpcode)) {
+      LLVM_DEBUG(dbgs() << "Removing cancelled flag operation:\n  " << MI);
+      MBB.erase(MBBI);
+      MBBI = NextMBBI;
       Modified = true;
       continue;
     }
