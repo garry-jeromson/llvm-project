@@ -151,16 +151,18 @@ void W65816AsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
 
   adjustFixupValue(Fixup, Target, Value, &getContext());
 
-  if (Value == 0)
-    return;
+  // Note: We removed the early return for Value==0 because symbols at
+  // offset 0 in a section are valid targets and need their fixups applied.
 
   MCFixupKindInfo Info = getFixupKindInfo(Fixup.getKind());
   unsigned NumBytes = (Info.TargetSize + 7) / 8;
 
   // Note: Data already points to the fixup location within the fragment,
   // so we write starting at Data[0], not Data[Fixup.getOffset()]
+  // We use assignment, not OR, because the instruction bytes were already
+  // initialized to 0 and we need to write the actual fixup value.
   for (unsigned i = 0; i < NumBytes; ++i) {
-    Data[i] |= static_cast<uint8_t>((Value >> (i * 8)) & 0xFF);
+    Data[i] = static_cast<uint8_t>((Value >> (i * 8)) & 0xFF);
   }
 }
 

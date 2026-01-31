@@ -29,8 +29,11 @@ enum NodeType : unsigned {
   /// Return from subroutine
   RET_FLAG,
 
-  /// Represents an abstract call instruction
+  /// Represents an abstract call instruction (JSR - 16-bit)
   CALL,
+
+  /// Represents a far call instruction (JSL - 24-bit)
+  FAR_CALL,
 
   /// Wrapper node for global addresses
   WRAPPER,

@@ -195,6 +195,8 @@ const char *W65816TargetLowering::getTargetNodeName(unsigned Opcode) const {
     return "W65816ISD::RET_FLAG";
   case W65816ISD::CALL:
     return "W65816ISD::CALL";
+  case W65816ISD::FAR_CALL:
+    return "W65816ISD::FAR_CALL";
   case W65816ISD::WRAPPER:
     return "W65816ISD::WRAPPER";
   case W65816ISD::CMP:
@@ -964,7 +966,15 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     Glue = Chain.getValue(1);
   }
 
-  // Get the target global address
+  // Check if this is a far call (callee has w65816_farfunc attribute)
+  bool IsFarCall = false;
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    if (const Function *F = dyn_cast<Function>(G->getGlobal())) {
+      IsFarCall = F->hasFnAttribute("w65816_farfunc");
+    }
+  }
+
+  // Get the target global address (always i16, JSL handles 24-bit encoding)
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
     Callee = DAG.getTargetGlobalAddress(G->getGlobal(), DL, MVT::i16);
   else if (ExternalSymbolSDNode *E = dyn_cast<ExternalSymbolSDNode>(Callee))
@@ -982,16 +992,16 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
       Ops.push_back(DAG.getRegister(VA.getLocReg(), VA.getLocVT()));
   }
 
-  // Add a register mask operand to define caller-saved registers
-  const TargetRegisterInfo *TRI = Subtarget.getRegisterInfo();
-  const uint32_t *Mask = TRI->getCallPreservedMask(MF, CallConv);
-  Ops.push_back(DAG.getRegisterMask(Mask));
+  // Note: Register mask operand is not needed since JSR/JSL have
+  // Defs = [SP, A, X, Y, P] which defines caller-saved registers
 
   if (Glue.getNode())
     Ops.push_back(Glue);
 
+  // Use FAR_CALL for far functions (JSL), CALL for near functions (JSR)
   SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
-  Chain = DAG.getNode(W65816ISD::CALL, DL, NodeTys, Ops);
+  unsigned CallOpc = IsFarCall ? W65816ISD::FAR_CALL : W65816ISD::CALL;
+  Chain = DAG.getNode(CallOpc, DL, NodeTys, Ops);
   Glue = Chain.getValue(1);
 
   // Handle return values

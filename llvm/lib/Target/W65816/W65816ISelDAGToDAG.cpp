@@ -126,72 +126,10 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
   default:
     break;
 
-  case ISD::CopyToReg: {
-    // Handle CopyToReg with immediate source to X or Y register
-    // This needs special handling because we need to use LDX/LDY instructions
-    SDValue Chain = N->getOperand(0);
-    SDValue DestReg = N->getOperand(1);
-    SDValue Src = N->getOperand(2);
-    bool HasGlueIn = N->getNumOperands() > 3;
-    bool HasGlueOut = N->getNumValues() > 1;
-
-    // Check if destination is a physical register
-    if (RegisterSDNode *RN = dyn_cast<RegisterSDNode>(DestReg)) {
-      Register Reg = RN->getReg();
-
-      // Check if source is an immediate
-      if (ConstantSDNode *Imm = dyn_cast<ConstantSDNode>(Src)) {
-        // Use getZExtValue and mask to 16 bits to handle negative values
-        uint64_t Val = Imm->getZExtValue() & 0xFFFF;
-        unsigned LoadOpc = 0;
-
-        if (Reg == W65816::X) {
-          LoadOpc = W65816::LDX_imm16;
-        } else if (Reg == W65816::Y) {
-          LoadOpc = W65816::LDY_imm16;
-        }
-
-        if (LoadOpc != 0) {
-          // Create the load immediate instruction
-          SDValue ImmVal = CurDAG->getTargetConstant(Val, DL, MVT::i16);
-
-          // Build operands - the instruction just takes the immediate
-          SmallVector<SDValue, 4> Ops;
-          Ops.push_back(ImmVal);
-
-          // Add chain as implicit operand
-          Ops.push_back(Chain);
-
-          // Add glue input if present
-          if (HasGlueIn)
-            Ops.push_back(N->getOperand(3));
-
-          // Output types: the register value, chain, and optionally glue
-          SmallVector<EVT, 3> VTs;
-          VTs.push_back(MVT::i16);  // The loaded value (implicit def of reg)
-          VTs.push_back(MVT::Other);  // Chain
-          if (HasGlueOut)
-            VTs.push_back(MVT::Glue);
-
-          MachineSDNode *LoadInst = CurDAG->getMachineNode(
-              LoadOpc, DL, CurDAG->getVTList(VTs), Ops);
-
-          // Replace uses:
-          // - Output 0 (value) isn't directly used since it's going to phys reg
-          // - Output 1 (chain) replaces the original chain output
-          // - Output 2 (glue) replaces original glue output if present
-          ReplaceUses(SDValue(N, 0), SDValue(LoadInst, 1));  // chain
-          if (HasGlueOut)
-            ReplaceUses(SDValue(N, 1), SDValue(LoadInst, 2));  // glue
-
-          CurDAG->RemoveDeadNode(N);
-          return;
-        }
-        // For A register, fall through to default handling (LDA_imm16 pattern)
-      }
-    }
-    break;
-  }
+  // Note: CopyToReg is handled by default selection. The MOV16ri pattern
+  // will be selected for immediate loads, then COPY instructions will copy
+  // to physical registers. This ensures proper liveness for call argument
+  // setup. The MOV16ri pseudo is later expanded to LDA/LDX/LDY_imm16.
 
   case ISD::FrameIndex: {
     int FI = cast<FrameIndexSDNode>(N)->getIndex();
@@ -1190,52 +1128,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     }
     break;
   }
-
-  case W65816ISD::CALL: {
-    // Select W65816 call to JSR or JSL instruction
-    // JSL (Jump Subroutine Long) is used for far calls to functions with
-    // the "w65816_farfunc" attribute
-    SDValue Chain = N->getOperand(0);
-    SDValue Callee = N->getOperand(1);
-
-    // Determine if this is a far call (JSL vs JSR)
-    bool IsFarCall = false;
-    SDValue Target;
-
-    if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
-      const GlobalValue *GV = G->getGlobal();
-      // Check if callee function has w65816_farfunc attribute
-      if (const Function *F = dyn_cast<Function>(GV)) {
-        IsFarCall = F->hasFnAttribute("w65816_farfunc");
-      }
-      MVT AddrVT = IsFarCall ? MVT::i32 : MVT::i16;
-      Target = CurDAG->getTargetGlobalAddress(GV, DL, AddrVT, G->getOffset());
-    } else if (ExternalSymbolSDNode *E = dyn_cast<ExternalSymbolSDNode>(Callee)) {
-      // External symbols - use 16-bit by default
-      Target = CurDAG->getTargetExternalSymbol(E->getSymbol(), MVT::i16);
-    } else {
-      // Direct address
-      Target = Callee;
-    }
-
-    // Collect all operands for the call
-    SmallVector<SDValue, 8> Ops;
-    Ops.push_back(Target);
-    Ops.push_back(Chain);
-
-    // Add glue input - connects the CopyToReg instructions for args
-    if (N->getGluedNode())
-      Ops.push_back(N->getOperand(N->getNumOperands() - 1));
-
-    // Create the JSR or JSL node
-    // Note: JSR/JSL Defs specify caller-saved registers (A, X, Y, P, SP)
-    SDVTList VTs = CurDAG->getVTList(MVT::Other, MVT::Glue);
-    unsigned Opcode = IsFarCall ? W65816::JSL : W65816::JSR;
-    MachineSDNode *Call = CurDAG->getMachineNode(Opcode, DL, VTs, Ops);
-
-    ReplaceNode(N, Call);
-    return;
-  }
+  // Note: W65816ISD::CALL and W65816ISD::FAR_CALL are handled by TableGen patterns
+  // The SDNPVariadic flag ensures that argument register operands become implicit uses
   }
 
   // Select the default instruction

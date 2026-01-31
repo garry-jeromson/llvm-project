@@ -19,6 +19,7 @@
 #include "W65816TargetMachine.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
 
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -76,6 +77,7 @@ private:
 
   const W65816RegisterInfo *TRI;
   const W65816InstrInfo *TII;
+  const MachineRegisterInfo *MRI;
 
   bool expandMBB(Block &MBB);
   bool expandMI(Block &MBB, BlockIt MBBI);
@@ -172,6 +174,7 @@ bool W65816ExpandPseudo::runOnMachineFunction(MachineFunction &MF) {
   const W65816Subtarget &STI = MF.getSubtarget<W65816Subtarget>();
   TRI = STI.getRegisterInfo();
   TII = STI.getInstrInfo();
+  MRI = &MF.getRegInfo();
 
   for (Block &MBB : MF) {
     Modified |= expandMBB(MBB);
@@ -2041,26 +2044,70 @@ bool W65816ExpandPseudo::expandRELOAD_GPR16(Block &MBB, BlockIt MBBI) {
 
   // RELOAD_GPR16 $dst, $fi
   // Load from stack frame slot to any GPR16 register
-  // Expanded to: LDA_sr (+ TAX/TAY if dest is X/Y)
+  // For A destination: just LDA_sr
+  // For X/Y destinations: LDA_sr + TAX/TAY, with A saved to Direct Page if live
+  //
+  // IMPORTANT: We cannot use PHA/PLA to save A because:
+  // 1. PHA changes SP (stack pointer)
+  // 2. LDA_sr uses stack-relative addressing which depends on SP
+  // 3. If we push A, the stack offset to our frame slot is now wrong
+  //
+  // Instead, we save A to a scratch Direct Page location ($FC) when A is live.
+  // This doesn't affect SP so stack-relative addressing remains correct.
 
   Register DstReg = MI.getOperand(0).getReg();
   MachineOperand &FIOp = MI.getOperand(1);
 
-  // Load to A first (always required)
-  auto LoadInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_sr), W65816::A);
-  if (FIOp.isFI()) {
-    LoadInst.addFrameIndex(FIOp.getIndex());
-  } else {
-    LoadInst.add(FIOp);
-  }
+  // Scratch DP location for saving A (different from $FE used by ADD/SUB)
+  static const unsigned RELOAD_SCRATCH_DP = 0xFC;
 
-  // Transfer to destination if not A
-  if (DstReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TAX);
-  } else if (DstReg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TAY);
+  if (DstReg == W65816::A) {
+    // Direct load to A - no protection needed
+    auto LoadInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_sr), W65816::A);
+    if (FIOp.isFI()) {
+      LoadInst.addFrameIndex(FIOp.getIndex());
+    } else {
+      LoadInst.add(FIOp);
+    }
+  } else {
+    // Loading into X or Y - check if A is live and needs protection
+    // Compute live registers at this point by walking backward from the end
+    // of the block and stepping to just before this instruction.
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+
+    // A is live if it's in the live set (will be used after this instruction)
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+
+    if (ALive) {
+      // Save A to scratch DP location (doesn't affect SP)
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(RELOAD_SCRATCH_DP);
+    }
+
+    auto LoadInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_sr), W65816::A);
+    if (FIOp.isFI()) {
+      LoadInst.addFrameIndex(FIOp.getIndex());
+    } else {
+      LoadInst.add(FIOp);
+    }
+
+    if (DstReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TAX);
+    } else if (DstReg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TAY);
+    }
+
+    if (ALive) {
+      // Restore A from scratch DP location
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(RELOAD_SCRATCH_DP);
+    }
   }
-  // If DstReg == A, value is already there
 
   MI.eraseFromParent();
   return true;

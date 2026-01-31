@@ -258,14 +258,19 @@ def store_op : PatFrag<(ops node:$val, node:$ptr), (store node:$val, node:$ptr)>
 // W65816 Target-Specific SDNode Definitions
 //===----------------------------------------------------------------------===//
 
-// SDT for call instruction
+// SDT for call instructions (both use i16 address, JSL encodes 24-bit internally)
 def SDT_W65816Call : SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>;
 
 def retflag : SDNode<"W65816ISD::RET_FLAG", SDTNone,
                      [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
+// Near call (JSR - 16-bit address)
 def W65816call : SDNode<"W65816ISD::CALL", SDT_W65816Call,
                         [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+
+// Far call (JSL - 24-bit address, uses i16 in DAG but JSL encodes 24-bit)
+def W65816far_call : SDNode<"W65816ISD::FAR_CALL", SDT_W65816Call,
+                            [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
 
 def W65816Wrapper : SDNode<"W65816ISD::WRAPPER", SDTIntUnaryOp>;
 
@@ -591,10 +596,9 @@ def STA_dpIndLongY : W65816Inst16<0x97, (outs), (ins ACC16:$src, indLdpY:$imm),
 
 let Defs = [P], Predicates = [UseIdx16Bit] in {
   // LDX - Load X Register (16-bit)
-  // Note: output is X register class to enable pattern matching for X reg
+  // No pattern - use MOV16ri for immediate loads to ensure proper COPY generation
   def LDX_imm16 : W65816Inst24<0xA2, (outs X16:$dst), (ins imm16:$addr),
-                               "ldx\t#$addr",
-                               [(set X16:$dst, imm:$addr)]>;
+                               "ldx\t#$addr", []>;
 
   def LDX_abs : W65816Inst24<0xAE, (outs X16:$dst), (ins addr16:$addr),
                              "ldx\t$addr",
@@ -609,9 +613,9 @@ let Defs = [P], Predicates = [UseIdx16Bit] in {
   }
 
   // LDY - Load Y Register (16-bit)
+  // No pattern - use MOV16ri for immediate loads to ensure proper COPY generation
   def LDY_imm16 : W65816Inst24<0xA0, (outs Y16:$dst), (ins imm16:$addr),
-                               "ldy\t#$addr",
-                               [(set Y16:$dst, imm:$addr)]>;
+                               "ldy\t#$addr", []>;
 
   def LDY_abs : W65816Inst24<0xAC, (outs IDX16:$dst), (ins addr16:$addr),
                              "ldy\t$addr", []>;
@@ -1357,20 +1361,30 @@ let isBarrier = 1, isBranch = 1, isTerminator = 1 in {
 //===----------------------------------------------------------------------===//
 
 let isCall = 1 in {
-  // JSR - Jump to Subroutine
+  // JSR - Jump to Subroutine (16-bit address)
+  // Uses addr16 operand to properly handle symbol references and generate fixups
   def JSR : W65816Inst24<0x20, (outs), (ins addr16:$addr),
                          "jsr\t$addr", []> {
     let Defs = [SP, A, X, Y, P];  // Caller-saved registers
     let Uses = [SP];
   }
 
-  // JSL - Jump to Subroutine Long (24-bit)
-  def JSL : W65816Inst32<0x22, (outs), (ins i32imm:$addr),
+  // JSL - Jump to Subroutine Long (24-bit address)
+  // Uses addr16 operand to match call patterns, encodes as 24-bit with bank 0
+  // The instruction is 4 bytes: opcode + 24-bit address
+  def JSL : W65816Inst32<0x22, (outs), (ins addr16:$addr),
                          "jsl\t$addr", []> {
     let Defs = [SP, A, X, Y, P];  // Caller-saved registers
     let Uses = [SP];
   }
 }
+
+// Call patterns - the variadic operands (argument registers) are handled
+// automatically when the pattern matcher sees the SDNPVariadic SDNode
+def : Pat<(W65816call (i16 tglobaladdr:$addr)), (JSR tglobaladdr:$addr)>;
+def : Pat<(W65816call (i16 texternalsym:$addr)), (JSR texternalsym:$addr)>;
+def : Pat<(W65816far_call (i16 tglobaladdr:$addr)), (JSL tglobaladdr:$addr)>;
+def : Pat<(W65816far_call (i16 texternalsym:$addr)), (JSL texternalsym:$addr)>;
 
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
   // RTS - Return from Subroutine

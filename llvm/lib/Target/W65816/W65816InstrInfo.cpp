@@ -185,49 +185,17 @@ void W65816InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
         .addMemOperand(MMO);
   } else if (W65816::IDX16RegClass.hasSubClassEq(RC) ||
              DestReg == W65816::X || DestReg == W65816::Y) {
-    // For X/Y, load to A first, then transfer
-    // A is clobbered but we mark it properly
-    BuildMI(MBB, MI, DL, get(W65816::LDA_sr), W65816::A)
+    // For X/Y, we need to use a pseudo that hides the internal A usage
+    // from the register allocator. This will be expanded after RA.
+    BuildMI(MBB, MI, DL, get(W65816::RELOAD_GPR16), DestReg)
         .addFrameIndex(FrameIndex)
-        .addMemOperand(MMO)
-        .addReg(W65816::A, RegState::ImplicitDefine);
-    if (DestReg == W65816::X) {
-      BuildMI(MBB, MI, DL, get(W65816::TAX))
-          .addReg(W65816::A, RegState::Kill);
-    } else {
-      BuildMI(MBB, MI, DL, get(W65816::TAY))
-          .addReg(W65816::A, RegState::Kill);
-    }
+        .addMemOperand(MMO);
   } else if (W65816::GPR16RegClass.hasSubClassEq(RC)) {
-    // GPR16 includes A, X, Y
-    if (DestReg == W65816::A) {
-      BuildMI(MBB, MI, DL, get(W65816::LDA_sr), DestReg)
-          .addFrameIndex(FrameIndex)
-          .addMemOperand(MMO);
-    } else if (DestReg == W65816::X) {
-      BuildMI(MBB, MI, DL, get(W65816::LDA_sr), W65816::A)
-          .addFrameIndex(FrameIndex)
-          .addMemOperand(MMO)
-          .addReg(W65816::A, RegState::ImplicitDefine);
-      BuildMI(MBB, MI, DL, get(W65816::TAX))
-          .addReg(W65816::A, RegState::Kill);
-    } else if (DestReg == W65816::Y) {
-      BuildMI(MBB, MI, DL, get(W65816::LDA_sr), W65816::A)
-          .addFrameIndex(FrameIndex)
-          .addMemOperand(MMO)
-          .addReg(W65816::A, RegState::ImplicitDefine);
-      BuildMI(MBB, MI, DL, get(W65816::TAY))
-          .addReg(W65816::A, RegState::Kill);
-    } else if (DestReg.isVirtual()) {
-      // Use RELOAD_GPR16 pseudo for virtual registers.
-      // This doesn't constrain to ACC16, giving the allocator flexibility.
-      // The pseudo is expanded after register allocation.
-      BuildMI(MBB, MI, DL, get(W65816::RELOAD_GPR16), DestReg)
-          .addFrameIndex(FrameIndex)
-          .addMemOperand(MMO);
-    } else {
-      llvm_unreachable("Unknown GPR16 register");
-    }
+    // GPR16 includes A, X, Y - use the pseudo for all cases
+    // The pseudo expansion will handle the A save/restore when needed
+    BuildMI(MBB, MI, DL, get(W65816::RELOAD_GPR16), DestReg)
+        .addFrameIndex(FrameIndex)
+        .addMemOperand(MMO);
   } else {
     llvm_unreachable("Can't load this register class from stack slot");
   }
