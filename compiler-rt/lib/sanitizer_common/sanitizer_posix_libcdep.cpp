@@ -209,7 +209,8 @@ void UnsetAlternateSignalStack() {
   altstack.ss_flags = SS_DISABLE;
   altstack.ss_size = GetAltStackSize();  // Some sane value required on Darwin.
   CHECK_EQ(0, sigaltstack(&altstack, &oldstack));
-  UnmapOrDie(oldstack.ss_sp, oldstack.ss_size);
+  if (IsAligned((uptr)oldstack.ss_sp, GetPageSizeCached()))
+    UnmapOrDie(oldstack.ss_sp, oldstack.ss_size);
 }
 
 bool IsSignalHandlerFromSanitizer(int signum) {
