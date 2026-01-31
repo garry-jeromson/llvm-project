@@ -30,6 +30,9 @@
 .import __udivhi3
 .import __modhi3
 .import __umodhi3
+.import memcpy
+.import memset
+.import memmove
 
 ;-------------------------------------------------------------------------------
 ; Test result storage (in zero page for easy inspection)
@@ -43,6 +46,14 @@ test_status:    .res 2          ; $0006: 0x600D = all pass, 0xFA11 = fail
 ; Temporary for test cases
 expected:       .res 2          ; $0008: Expected result
 actual:         .res 2          ; $000A: Actual result
+
+;-------------------------------------------------------------------------------
+; Test buffers for memory operations (in BSS)
+;-------------------------------------------------------------------------------
+.bss
+src_buf:        .res 32         ; Source buffer for memory tests
+dest_buf:       .res 32         ; Destination buffer for memory tests
+overlap_buf:    .res 32         ; Buffer for overlap tests
 
 ;-------------------------------------------------------------------------------
 ; Code
@@ -67,6 +78,9 @@ actual:         .res 2          ; $000A: Actual result
         jsr test_divhi3
         jsr test_umodhi3
         jsr test_modhi3
+        jsr test_memcpy
+        jsr test_memset
+        jsr test_memmove
 
         ; Set final status
         lda test_failed
@@ -78,9 +92,8 @@ actual:         .res 2          ; $000A: Actual result
 @done:
         sta test_status
 
-        ; Infinite loop - check memory for results
-@halt:
-        bra @halt
+        ; Stop CPU - test runner will detect this
+        stp                     ; STP instruction (0xDB) halts the CPU
 .endproc
 
 ;===============================================================================
@@ -258,26 +271,26 @@ actual:         .res 2          ; $000A: Actual result
         jsr check_result
 
         ; Test 2: -10 / 2 = -5
-        lda #<(-5)              ; -5 = 0xFFFB
+        lda #.loword(-5)        ; -5 = 0xFFFB
         sta expected
-        lda #<(-10)             ; -10 = 0xFFF6
+        lda #.loword(-10)       ; -10 = 0xFFF6
         ldx #2
         jsr __divhi3
         jsr check_result
 
         ; Test 3: 10 / -2 = -5
-        lda #<(-5)
+        lda #.loword(-5)
         sta expected
         lda #10
-        ldx #<(-2)              ; -2 = 0xFFFE
+        ldx #.loword(-2)        ; -2 = 0xFFFE
         jsr __divhi3
         jsr check_result
 
         ; Test 4: -10 / -2 = 5
         lda #5
         sta expected
-        lda #<(-10)
-        ldx #<(-2)
+        lda #.loword(-10)
+        ldx #.loword(-2)
         jsr __divhi3
         jsr check_result
 
@@ -290,9 +303,9 @@ actual:         .res 2          ; $000A: Actual result
         jsr check_result
 
         ; Test 6: -7 / 3 = -2 (truncation toward zero)
-        lda #<(-2)
+        lda #.loword(-2)
         sta expected
-        lda #<(-7)
+        lda #.loword(-7)
         ldx #3
         jsr __divhi3
         jsr check_result
@@ -306,9 +319,9 @@ actual:         .res 2          ; $000A: Actual result
         jsr check_result
 
         ; Test 8: -32768 / 1 = -32768 (min negative)
-        lda #<(-32768)          ; 0x8000
+        lda #.loword(-32768)    ; 0x8000
         sta expected
-        lda #<(-32768)
+        lda #.loword(-32768)
         ldx #1
         jsr __divhi3
         jsr check_result
@@ -400,9 +413,9 @@ actual:         .res 2          ; $000A: Actual result
         jsr check_result
 
         ; Test 2: -10 % 3 = -1 (sign matches dividend)
-        lda #<(-1)              ; -1 = 0xFFFF
+        lda #.loword(-1)        ; -1 = 0xFFFF
         sta expected
-        lda #<(-10)
+        lda #.loword(-10)
         ldx #3
         jsr __modhi3
         jsr check_result
@@ -411,15 +424,15 @@ actual:         .res 2          ; $000A: Actual result
         lda #1
         sta expected
         lda #10
-        ldx #<(-3)
+        ldx #.loword(-3)
         jsr __modhi3
         jsr check_result
 
         ; Test 4: -10 % -3 = -1 (sign matches dividend)
-        lda #<(-1)
+        lda #.loword(-1)
         sta expected
-        lda #<(-10)
-        ldx #<(-3)
+        lda #.loword(-10)
+        ldx #.loword(-3)
         jsr __modhi3
         jsr check_result
 
@@ -432,9 +445,9 @@ actual:         .res 2          ; $000A: Actual result
         jsr check_result
 
         ; Test 6: -7 % 4 = -3
-        lda #<(-3)
+        lda #.loword(-3)
         sta expected
-        lda #<(-7)
+        lda #.loword(-7)
         ldx #4
         jsr __modhi3
         jsr check_result
@@ -448,13 +461,321 @@ actual:         .res 2          ; $000A: Actual result
         jsr check_result
 
         ; Test 8: -32768 % 3 = -2
-        lda #<(-2)
+        lda #.loword(-2)
         sta expected
-        lda #<(-32768)
+        lda #.loword(-32768)
         ldx #3
         jsr __modhi3
         jsr check_result
 
+        rts
+.endproc
+
+;===============================================================================
+; memcpy tests
+;===============================================================================
+.proc test_memcpy
+        ; Test 1: Copy 0 bytes (should not crash)
+        lda #.loword(dest_buf)
+        ldx #.loword(src_buf)
+        ldy #0
+        jsr memcpy
+        ; Just verify it returns dest
+        cmp #.loword(dest_buf)
+        bne @fail1
+        inc test_count
+        inc test_passed
+        bra @test2
+@fail1:
+        inc test_count
+        inc test_failed
+
+@test2:
+        ; Test 2: Copy 4 bytes
+        ; First, initialize source buffer with known values
+        sep #$20
+.a8
+        lda #$11
+        sta src_buf
+        lda #$22
+        sta src_buf+1
+        lda #$33
+        sta src_buf+2
+        lda #$44
+        sta src_buf+3
+        ; Clear dest
+        lda #0
+        sta dest_buf
+        sta dest_buf+1
+        sta dest_buf+2
+        sta dest_buf+3
+        rep #$20
+.a16
+        ; Do the copy
+        lda #.loword(dest_buf)
+        ldx #.loword(src_buf)
+        ldy #4
+        jsr memcpy
+        ; Verify
+        sep #$20
+.a8
+        lda dest_buf
+        cmp #$11
+        bne @fail2
+        lda dest_buf+1
+        cmp #$22
+        bne @fail2
+        lda dest_buf+2
+        cmp #$33
+        bne @fail2
+        lda dest_buf+3
+        cmp #$44
+        bne @fail2
+        rep #$20
+.a16
+        inc test_count
+        inc test_passed
+        bra @test3
+@fail2:
+        rep #$20
+.a16
+        inc test_count
+        inc test_failed
+
+@test3:
+        ; Test 3: Copy 1 byte
+        sep #$20
+.a8
+        lda #$AA
+        sta src_buf
+        lda #0
+        sta dest_buf
+        rep #$20
+.a16
+        lda #.loword(dest_buf)
+        ldx #.loword(src_buf)
+        ldy #1
+        jsr memcpy
+        sep #$20
+.a8
+        lda dest_buf
+        cmp #$AA
+        bne @fail3
+        rep #$20
+.a16
+        inc test_count
+        inc test_passed
+        rts
+@fail3:
+        rep #$20
+.a16
+        inc test_count
+        inc test_failed
+        rts
+.endproc
+
+;===============================================================================
+; memset tests
+;===============================================================================
+.proc test_memset
+        ; Test 1: Set 0 bytes (should not crash)
+        lda #.loword(dest_buf)
+        ldx #$FF
+        ldy #0
+        jsr memset
+        ; Just verify it returns dest
+        cmp #.loword(dest_buf)
+        bne @fail1
+        inc test_count
+        inc test_passed
+        bra @test2
+@fail1:
+        inc test_count
+        inc test_failed
+
+@test2:
+        ; Test 2: Set 4 bytes to $55
+        ; First clear the buffer
+        sep #$20
+.a8
+        lda #0
+        sta dest_buf
+        sta dest_buf+1
+        sta dest_buf+2
+        sta dest_buf+3
+        rep #$20
+.a16
+        ; Do the memset
+        lda #.loword(dest_buf)
+        ldx #$55
+        ldy #4
+        jsr memset
+        ; Verify
+        sep #$20
+.a8
+        lda dest_buf
+        cmp #$55
+        bne @fail2
+        lda dest_buf+1
+        cmp #$55
+        bne @fail2
+        lda dest_buf+2
+        cmp #$55
+        bne @fail2
+        lda dest_buf+3
+        cmp #$55
+        bne @fail2
+        rep #$20
+.a16
+        inc test_count
+        inc test_passed
+        bra @test3
+@fail2:
+        rep #$20
+.a16
+        inc test_count
+        inc test_failed
+
+@test3:
+        ; Test 3: Set 1 byte to $00 (zero fill)
+        sep #$20
+.a8
+        lda #$FF
+        sta dest_buf
+        rep #$20
+.a16
+        lda #.loword(dest_buf)
+        ldx #0
+        ldy #1
+        jsr memset
+        sep #$20
+.a8
+        lda dest_buf
+        cmp #0
+        bne @fail3
+        rep #$20
+.a16
+        inc test_count
+        inc test_passed
+        rts
+@fail3:
+        rep #$20
+.a16
+        inc test_count
+        inc test_failed
+        rts
+.endproc
+
+;===============================================================================
+; memmove tests
+;===============================================================================
+.proc test_memmove
+        ; Test 1: Non-overlapping copy (same as memcpy)
+        sep #$20
+.a8
+        lda #$AA
+        sta src_buf
+        lda #$BB
+        sta src_buf+1
+        lda #0
+        sta dest_buf
+        sta dest_buf+1
+        rep #$20
+.a16
+        lda #.loword(dest_buf)
+        ldx #.loword(src_buf)
+        ldy #2
+        jsr memmove
+        sep #$20
+.a8
+        lda dest_buf
+        cmp #$AA
+        bne @fail1
+        lda dest_buf+1
+        cmp #$BB
+        bne @fail1
+        rep #$20
+.a16
+        inc test_count
+        inc test_passed
+        bra @test2
+@fail1:
+        rep #$20
+.a16
+        inc test_count
+        inc test_failed
+
+@test2:
+        ; Test 2: Overlapping copy (dest > src) - backward copy needed
+        ; Set up overlap_buf: [1,2,3,4,5,0,0,0]
+        ; Copy bytes 0-4 to bytes 2-6: result should be [1,2,1,2,3,4,5,0]
+        sep #$20
+.a8
+        lda #1
+        sta overlap_buf
+        lda #2
+        sta overlap_buf+1
+        lda #3
+        sta overlap_buf+2
+        lda #4
+        sta overlap_buf+3
+        lda #5
+        sta overlap_buf+4
+        lda #0
+        sta overlap_buf+5
+        sta overlap_buf+6
+        sta overlap_buf+7
+        rep #$20
+.a16
+        ; memmove(overlap_buf+2, overlap_buf, 5)
+        lda #.loword(overlap_buf+2)     ; dest
+        ldx #.loword(overlap_buf)       ; src
+        ldy #5                          ; count
+        jsr memmove
+        ; Verify: overlap_buf should be [1,2,1,2,3,4,5,0]
+        sep #$20
+.a8
+        lda overlap_buf
+        cmp #1
+        bne @fail2
+        lda overlap_buf+1
+        cmp #2
+        bne @fail2
+        lda overlap_buf+2
+        cmp #1
+        bne @fail2
+        lda overlap_buf+3
+        cmp #2
+        bne @fail2
+        lda overlap_buf+4
+        cmp #3
+        bne @fail2
+        lda overlap_buf+5
+        cmp #4
+        bne @fail2
+        lda overlap_buf+6
+        cmp #5
+        bne @fail2
+        rep #$20
+.a16
+        inc test_count
+        inc test_passed
+        bra @test3
+@fail2:
+        rep #$20
+.a16
+        inc test_count
+        inc test_failed
+
+@test3:
+        ; Test 3: Move 0 bytes (should not crash, dest == src case)
+        lda #.loword(overlap_buf)
+        ldx #.loword(overlap_buf)
+        ldy #0
+        jsr memmove
+        ; Just verify it returns (doesn't crash)
+        inc test_count
+        inc test_passed
         rts
 .endproc
 

@@ -4,6 +4,8 @@ This directory contains runtime support functions required by the W65816 LLVM ba
 
 ## Functions Provided
 
+### Arithmetic
+
 | Function | Operation | Description |
 |----------|-----------|-------------|
 | `__mulhi3` | `A * X` | 16-bit unsigned multiplication |
@@ -12,11 +14,26 @@ This directory contains runtime support functions required by the W65816 LLVM ba
 | `__modhi3` | `A % X` | 16-bit signed remainder |
 | `__umodhi3` | `A % X` | 16-bit unsigned remainder |
 
+### Memory Operations
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `memcpy` | `memcpy(dest, src, n)` | Copy n bytes from src to dest |
+| `memset` | `memset(dest, c, n)` | Fill n bytes at dest with value c |
+| `memmove` | `memmove(dest, src, n)` | Copy n bytes, handles overlap |
+
 ## Calling Convention
 
+### Arithmetic Functions
 - **First argument**: A register (16-bit)
 - **Second argument**: X register (16-bit)
 - **Return value**: A register (16-bit)
+
+### Memory Functions
+- **dest**: A register (16-bit pointer)
+- **src/value**: X register (16-bit pointer or byte value)
+- **count**: Y register (16-bit byte count)
+- **Return value**: A register (original dest pointer)
 
 Functions may clobber A, X, Y, and processor flags. The direct page (D) and data bank (DBR) registers are preserved.
 
@@ -92,10 +109,9 @@ These are NOT used by the runtime library because:
 
 ## Memory Requirements
 
-- **Code**: ~200 bytes
+- **Code**: ~400 bytes
 - **Data**: 6 bytes of temporary storage (in `.bss` section)
-
-For zero-page optimization, move `_tmp0`, `_tmp1`, `_tmp2` to direct page addresses.
+- **Zero page**: 6 bytes for pointer operations (required by memcpy/memset/memmove)
 
 ## Testing the Runtime Library
 
@@ -116,7 +132,7 @@ ld65 -o test_runtime.bin test_runtime.o w65816_runtime.o -C test_runtime.cfg
 
 Load `test_runtime.bin` at address $8000 in any 65816 emulator and execute from $8000.
 
-The test runs 40 test cases (8 per function) and stores results in zero page:
+The test runs 49 test cases and stores results in zero page:
 
 | Address | Contents |
 |---------|----------|
@@ -137,8 +153,8 @@ The test binary is compatible with:
 ### Expected Output
 
 After execution completes (enters infinite loop):
-- `$0000` = 40 (0x0028) - total tests
-- `$0002` = 40 (0x0028) - passed
+- `$0000` = 49 (0x0031) - total tests
+- `$0002` = 49 (0x0031) - passed
 - `$0004` = 0 - failed
 - `$0006` = 0x600D - all tests passed
 
@@ -151,3 +167,6 @@ After execution completes (enters infinite loop):
 | `__divhi3` | 8 | positive, negative dividend, negative divisor, both negative, truncation toward zero |
 | `__umodhi3` | 8 | 0%1, basic, exact division, various sizes |
 | `__modhi3` | 8 | positive, sign-of-dividend cases, edge cases |
+| `memcpy` | 3 | 0 bytes, 4 bytes, 1 byte |
+| `memset` | 3 | 0 bytes, 4 bytes fill, zero fill |
+| `memmove` | 3 | non-overlapping, overlapping (backward), edge case |

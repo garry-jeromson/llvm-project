@@ -25,15 +25,24 @@
 .export __udivhi3
 .export __modhi3
 .export __umodhi3
+.export memcpy
+.export memset
+.export memmove
 
 ;-------------------------------------------------------------------------------
-; Temporary storage (in direct page or absolute - adjust as needed)
-; These can be moved to zero page for better performance
+; Temporary storage
 ;-------------------------------------------------------------------------------
+; Absolute addresses (for arithmetic temporaries)
 .bss
 _tmp0:      .res 2              ; Temporary storage
 _tmp1:      .res 2              ; Temporary storage
 _tmp2:      .res 2              ; Temporary storage (for sign handling)
+
+; Zero page addresses (required for indirect addressing in memcpy/memmove/memset)
+; Use fixed high ZP addresses ($F0-$F5) to avoid conflicts with user ZP usage
+_zp_ptr0 = $F0                  ; Zero page pointer 0 ($F0-$F1)
+_zp_ptr1 = $F2                  ; Zero page pointer 1 ($F2-$F3)
+_zp_tmp  = $F4                  ; Zero page temporary ($F4-$F5)
 
 .code
 
@@ -229,5 +238,188 @@ _tmp2:      .res 2              ; Temporary storage (for sign handling)
         eor #$FFFF
         inc a
 @done:
+        rts
+.endproc
+
+;===============================================================================
+; memcpy - Copy memory block
+;===============================================================================
+; Input:  A = dest pointer, X = src pointer, Y = byte count
+; Output: A = dest pointer (unchanged)
+; Clobbers: X, Y
+;
+; Copies Y bytes from src to dest. Does not handle overlapping regions
+; (use memmove for that). For overlapping regions where dest > src,
+; this will produce incorrect results.
+;===============================================================================
+.proc memcpy
+        sta _zp_tmp             ; Save dest for return value
+        sta _zp_ptr0            ; dest pointer (in ZP for indirect addressing)
+        stx _zp_ptr1            ; src pointer (in ZP for indirect addressing)
+
+        cpy #0                  ; Check if count is 0
+        beq @done
+
+        ; Use 8-bit accumulator for byte copying
+        sep #$20                ; 8-bit accumulator
+.a8
+@loop:
+        lda (_zp_ptr1)          ; Load byte from src
+        sta (_zp_ptr0)          ; Store byte to dest
+
+        ; Increment pointers
+        rep #$20                ; 16-bit accumulator for pointer math
+.a16
+        inc _zp_ptr0
+        inc _zp_ptr1
+
+        dey                     ; Decrement count
+        bne @loop_continue
+        bra @done
+
+@loop_continue:
+        sep #$20                ; Back to 8-bit for next iteration
+.a8
+        bra @loop
+
+@done:
+        rep #$20                ; Ensure 16-bit mode on exit
+.a16
+        lda _zp_tmp             ; Return original dest
+        rts
+.endproc
+
+;===============================================================================
+; memset - Fill memory with a byte value
+;===============================================================================
+; Input:  A = dest pointer, X = fill value (low byte used), Y = byte count
+; Output: A = dest pointer (unchanged)
+; Clobbers: X, Y
+;
+; Fills Y bytes starting at dest with the low byte of X.
+;===============================================================================
+.proc memset
+        sta _zp_tmp             ; Save dest for return value
+        sta _zp_ptr0            ; dest pointer (in ZP for indirect addressing)
+        stx _tmp0               ; Save fill value
+
+        cpy #0                  ; Check if count is 0
+        beq @done
+
+        ; Use 8-bit accumulator for byte operations
+        sep #$20                ; 8-bit accumulator
+.a8
+        lda _tmp0               ; Get fill value (low byte)
+
+@loop:
+        sta (_zp_ptr0)          ; Store byte to dest
+
+        ; Increment pointer (need 16-bit mode)
+        rep #$20
+.a16
+        inc _zp_ptr0
+        sep #$20
+.a8
+
+        dey                     ; Decrement count
+        bne @loop
+
+@done:
+        rep #$20                ; Ensure 16-bit mode on exit
+.a16
+        lda _zp_tmp             ; Return original dest
+        rts
+.endproc
+
+;===============================================================================
+; memmove - Copy memory block (handles overlapping regions)
+;===============================================================================
+; Input:  A = dest pointer, X = src pointer, Y = byte count
+; Output: A = dest pointer (unchanged)
+; Clobbers: X, Y
+;
+; Copies Y bytes from src to dest. Correctly handles overlapping regions
+; by copying forward if dest < src, backward if dest > src.
+;===============================================================================
+.proc memmove
+        sta _zp_tmp             ; Save dest for return value
+
+        cpy #0                  ; Check if count is 0
+        beq @done_early
+
+        ; Compare dest and src to determine copy direction
+        ; If dest <= src, copy forward (safe)
+        ; If dest > src, copy backward (handles overlap)
+        stx _tmp0               ; src (temporary)
+        cmp _tmp0               ; Compare dest with src
+        bcc @forward            ; dest < src: copy forward
+        beq @done_early         ; dest == src: nothing to do
+        bra @backward           ; dest > src: copy backward
+
+@forward:
+        ; Copy forward (low to high addresses)
+        sta _zp_ptr0            ; dest pointer (ZP for indirect)
+        stx _zp_ptr1            ; src pointer (ZP for indirect)
+
+        sep #$20                ; 8-bit accumulator
+.a8
+@fwd_loop:
+        lda (_zp_ptr1)          ; Load byte from src
+        sta (_zp_ptr0)          ; Store byte to dest
+
+        rep #$20                ; 16-bit for pointer math
+.a16
+        inc _zp_ptr0
+        inc _zp_ptr1
+        sep #$20                ; Back to 8-bit
+.a8
+
+        dey
+        bne @fwd_loop
+        bra @done
+
+@backward:
+        ; Copy backward (high to low addresses)
+        ; Start from dest + count - 1 and src + count - 1
+        sta _zp_ptr0            ; dest
+        stx _zp_ptr1            ; src
+
+        ; Add count-1 to both pointers
+        rep #$20
+.a16
+        tya                     ; count
+        dec a                   ; count - 1
+        clc
+        adc _zp_ptr0
+        sta _zp_ptr0            ; dest + count - 1
+        tya
+        dec a
+        clc
+        adc _zp_ptr1
+        sta _zp_ptr1            ; src + count - 1
+
+        sep #$20                ; 8-bit accumulator
+.a8
+@bwd_loop:
+        lda (_zp_ptr1)          ; Load byte from src
+        sta (_zp_ptr0)          ; Store byte to dest
+
+        rep #$20                ; 16-bit for pointer math
+.a16
+        dec _zp_ptr0
+        dec _zp_ptr1
+        sep #$20                ; Back to 8-bit
+.a8
+
+        dey
+        bne @bwd_loop
+
+@done:
+        rep #$20                ; Ensure 16-bit mode on exit
+.a16
+        lda _zp_tmp             ; Return original dest
+        rts
+
+@done_early:
         rts
 .endproc
