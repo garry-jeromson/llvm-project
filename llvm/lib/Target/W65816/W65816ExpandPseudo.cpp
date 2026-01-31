@@ -127,6 +127,11 @@ private:
   bool expandSelect16Unsigned(Block &MBB, BlockIt MBBI, unsigned CondCode);
   bool expandLDA8_abs(Block &MBB, BlockIt MBBI);
   bool expandLDA8_sr(Block &MBB, BlockIt MBBI);
+  bool expandAND8_abs(Block &MBB, BlockIt MBBI);
+  bool expandORA8_abs(Block &MBB, BlockIt MBBI);
+  bool expandEOR8_abs(Block &MBB, BlockIt MBBI);
+  bool expandADC8_abs(Block &MBB, BlockIt MBBI);
+  bool expandSBC8_abs(Block &MBB, BlockIt MBBI);
   bool expandSTA8_abs(Block &MBB, BlockIt MBBI);
   bool expandSTA8_sr(Block &MBB, BlockIt MBBI);
   bool expandLDA8_srIndY(Block &MBB, BlockIt MBBI);
@@ -268,6 +273,16 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandLDA8_abs(MBB, MBBI);
   case W65816::LDA8_sr:
     return expandLDA8_sr(MBB, MBBI);
+  case W65816::AND8_abs:
+    return expandAND8_abs(MBB, MBBI);
+  case W65816::ORA8_abs:
+    return expandORA8_abs(MBB, MBBI);
+  case W65816::EOR8_abs:
+    return expandEOR8_abs(MBB, MBBI);
+  case W65816::ADC8_abs:
+    return expandADC8_abs(MBB, MBBI);
+  case W65816::SBC8_abs:
+    return expandSBC8_abs(MBB, MBBI);
   case W65816::STA8_abs:
     return expandSTA8_abs(MBB, MBBI);
   case W65816::STA8_sr:
@@ -2649,6 +2664,185 @@ bool W65816ExpandPseudo::expandLDA8_sr(Block &MBB, BlockIt MBBI) {
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
   }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandAND8_abs(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // AND8_abs $dst, $src, $addr
+  // Takes: src (16-bit value with 8-bit operand in low byte)
+  // ANDs with 8-bit value at addr, result zero-extended to 16-bit
+  // Expands to:
+  //   SEP #$20        ; switch to 8-bit accumulator
+  //   AND addr        ; 8-bit AND with memory
+  //   REP #$20        ; switch back to 16-bit accumulator
+  //   AND #$00FF      ; zero-extend result
+
+  MachineOperand &AddrOp = MI.getOperand(2);
+
+  // SEP #$20 - set M flag (8-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // AND addr (in 8-bit mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_abs), W65816::A)
+      .addReg(W65816::A)
+      .add(AddrOp);
+
+  // REP #$20 - reset M flag (16-bit accumulator mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  // AND #$00FF - zero-extend (ensure high byte is 0)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandORA8_abs(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // ORA8_abs $dst, $src, $addr
+  // Same pattern as AND8_abs but with ORA instruction
+
+  MachineOperand &AddrOp = MI.getOperand(2);
+
+  // SEP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // ORA addr (in 8-bit mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_abs), W65816::A)
+      .addReg(W65816::A)
+      .add(AddrOp);
+
+  // REP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  // AND #$00FF - zero-extend
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandEOR8_abs(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // EOR8_abs $dst, $src, $addr
+  // Same pattern as AND8_abs but with EOR instruction
+
+  MachineOperand &AddrOp = MI.getOperand(2);
+
+  // SEP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // EOR addr (in 8-bit mode)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_abs), W65816::A)
+      .addReg(W65816::A)
+      .add(AddrOp);
+
+  // REP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  // AND #$00FF - zero-extend
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandADC8_abs(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // ADC8_abs $dst, $src, $addr
+  // 8-bit ADD with memory operand, result zero-extended
+  // Expands to:
+  //   SEP #$20        ; switch to 8-bit accumulator
+  //   CLC             ; clear carry for proper add (not add-with-carry)
+  //   ADC addr        ; 8-bit add with memory
+  //   REP #$20        ; switch back to 16-bit accumulator
+  //   AND #$00FF      ; zero-extend result
+
+  // Operand 0: $dst/$src (tied), Operand 1: $src (implicit tied), Operand 2: $addr
+  MachineOperand &AddrOp = MI.getOperand(2);
+
+  // SEP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // CLC - clear carry for proper add
+  buildMI(MBB, MBBI, W65816::CLC);
+
+  // ADC addr (in 8-bit mode) - ADC_abs only takes addr, implicitly uses/defs A
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_abs), W65816::A)
+      .add(AddrOp);
+
+  // REP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  // AND #$00FF - zero-extend
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSBC8_abs(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // SBC8_abs $dst, $src, $addr
+  // 8-bit SUB with memory operand, result zero-extended
+  // Expands to:
+  //   SEP #$20        ; switch to 8-bit accumulator
+  //   SEC             ; set carry for proper subtract (not subtract-with-borrow)
+  //   SBC addr        ; 8-bit subtract with memory
+  //   REP #$20        ; switch back to 16-bit accumulator
+  //   AND #$00FF      ; zero-extend result
+
+  // Operand 0: $dst/$src (tied), Operand 1: $src (implicit tied), Operand 2: $addr
+  MachineOperand &AddrOp = MI.getOperand(2);
+
+  // SEP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
+      .addImm(0x20);
+
+  // SEC - set carry for proper subtract
+  buildMI(MBB, MBBI, W65816::SEC);
+
+  // SBC addr (in 8-bit mode) - SBC_abs only takes addr, implicitly uses/defs A
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_abs), W65816::A)
+      .add(AddrOp);
+
+  // REP #$20
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP))
+      .addImm(0x20);
+
+  // AND #$00FF - zero-extend
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
 
   MI.eraseFromParent();
   return true;

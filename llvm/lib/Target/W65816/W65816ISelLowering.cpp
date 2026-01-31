@@ -152,8 +152,15 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   setLoadExtAction(ISD::SEXTLOAD, MVT::i16, MVT::i8, Custom);
   setLoadExtAction(ISD::EXTLOAD, MVT::i16, MVT::i8, Custom);
 
+  // Boolean (i1) loads: treat as i8 loads since booleans are stored as bytes
+  setLoadExtAction(ISD::ZEXTLOAD, MVT::i16, MVT::i1, Custom);
+  setLoadExtAction(ISD::SEXTLOAD, MVT::i16, MVT::i1, Custom);
+  setLoadExtAction(ISD::EXTLOAD, MVT::i16, MVT::i1, Custom);
+
   // For stores: truncate 16-bit values to 8-bit
   setTruncStoreAction(MVT::i16, MVT::i8, Custom);
+  // Boolean stores: treat as i8 truncating stores
+  setTruncStoreAction(MVT::i16, MVT::i1, Custom);
 
   // i8 operation actions depend on accumulator mode
   if (STI.uses8BitAccumulator()) {
@@ -187,6 +194,10 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::VAARG, MVT::Other, Expand);
   setOperationAction(ISD::VAEND, MVT::Other, Expand);
   setOperationAction(ISD::VACOPY, MVT::Other, Expand);
+
+  // Enable DAG combine for AND/OR/XOR to optimize 8-bit load + binop patterns
+  // This avoids register pressure issues when both operands are 8-bit loads
+  setTargetDAGCombine({ISD::AND, ISD::OR, ISD::XOR});
 }
 
 const char *W65816TargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -488,6 +499,22 @@ SDValue W65816TargetLowering::LowerLoad(SDValue Op, SelectionDAG &DAG) const {
   EVT MemVT = LD->getMemoryVT();
   EVT VT = Op.getValueType();
 
+  // Handle boolean (i1) extending loads - treat as i8 loads
+  // Booleans are stored as bytes (0 or 1)
+  if (MemVT == MVT::i1 && VT == MVT::i16) {
+    // Load as i8 and zero-extend (booleans are always 0 or 1)
+    // Create an i8 extending load instead
+    SDValue NewLoad = DAG.getExtLoad(
+        ISD::ZEXTLOAD, DL, MVT::i16, Chain, Addr,
+        LD->getPointerInfo(), MVT::i8, LD->getAlign(),
+        LD->getMemOperand()->getFlags());
+    // The result is already zero-extended to i16
+    // AND with 1 to ensure it's a valid boolean (0 or 1)
+    SDValue One = DAG.getConstant(1, DL, MVT::i16);
+    SDValue Masked = DAG.getNode(ISD::AND, DL, MVT::i16, NewLoad, One);
+    return DAG.getMergeValues({Masked, NewLoad.getValue(1)}, DL);
+  }
+
   // Handle 8-bit extending loads (zext/sext from i8 to i16)
   if (MemVT == MVT::i8 && VT == MVT::i16) {
     // The W65816 needs mode switching for 8-bit operations
@@ -597,6 +624,18 @@ SDValue W65816TargetLowering::LowerStore(SDValue Op, SelectionDAG &DAG) const {
   SDValue Addr = ST->getBasePtr();
   EVT MemVT = ST->getMemoryVT();
   EVT ValVT = Value.getValueType();
+
+  // Handle boolean (i1) truncating stores - treat as i8 stores
+  if (MemVT == MVT::i1 && ValVT == MVT::i16) {
+    // Store as i8 (booleans are stored as 0 or 1 byte)
+    // AND with 1 to ensure we only store 0 or 1
+    SDValue One = DAG.getConstant(1, DL, MVT::i16);
+    SDValue Masked = DAG.getNode(ISD::AND, DL, MVT::i16, Value, One);
+    // Create an i8 truncating store
+    return DAG.getTruncStore(Chain, DL, Masked, Addr, ST->getPointerInfo(),
+                             MVT::i8, ST->getAlign(),
+                             ST->getMemOperand()->getFlags());
+  }
 
   // Handle truncating stores (i16 -> i8)
   if (MemVT == MVT::i8 && ValVT == MVT::i16) {
@@ -1241,4 +1280,108 @@ void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
     for (unsigned I = 0, E = Res->getNumValues(); I != E; ++I)
       Results.push_back(Res.getValue(I));
   }
+}
+
+/// Check if a node is a zext/anyext load from i8 to i16
+static bool isExtLoadFromI8(SDValue N, SDValue &BaseAddr, SDValue &Chain) {
+  // Check for extending load from i8
+  if (auto *LD = dyn_cast<LoadSDNode>(N)) {
+    if (LD->getMemoryVT() == MVT::i8 &&
+        LD->getExtensionType() != ISD::NON_EXTLOAD) {
+      BaseAddr = LD->getBasePtr();
+      Chain = LD->getChain();
+      return true;
+    }
+  }
+
+  // Also check for (and (load i8), 255) pattern which is equivalent to zextload
+  if (N.getOpcode() == ISD::AND) {
+    if (auto *C = dyn_cast<ConstantSDNode>(N.getOperand(1))) {
+      if (C->getZExtValue() == 255) {
+        SDValue Inner = N.getOperand(0);
+        if (auto *LD = dyn_cast<LoadSDNode>(Inner)) {
+          if (LD->getMemoryVT() == MVT::i8) {
+            BaseAddr = LD->getBasePtr();
+            Chain = LD->getChain();
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/// Check if an address is a simple global address (not indexed)
+static bool isSimpleGlobalAddr(SDValue Addr) {
+  if (Addr.getOpcode() == W65816ISD::WRAPPER) {
+    SDValue Inner = Addr.getOperand(0);
+    return Inner.getOpcode() == ISD::TargetGlobalAddress;
+  }
+  return false;
+}
+
+SDValue
+W65816TargetLowering::PerformDAGCombine(SDNode *N,
+                                        DAGCombinerInfo &DCI) const {
+  (void)DCI; // May be used in future combines
+  (void)N;   // Used in switch below
+
+  switch (N->getOpcode()) {
+  default:
+    break;
+
+  case ISD::AND:
+  case ISD::OR:
+  case ISD::XOR: {
+    // Optimize (binop (zextload i8), (zextload i8)) pattern
+    // This avoids register pressure issues on the W65816 which only has
+    // A, X, Y registers and loads can only go to A.
+    //
+    // Instead of:
+    //   lda addr1 ; zext ; spill ; lda addr2 ; zext ; reload ; and
+    // We generate:
+    //   sep #32 ; lda addr1 ; binop addr2 ; rep #32 ; and #255
+    //
+    // This uses memory-operand form and only needs one register.
+
+    SDValue LHS = N->getOperand(0);
+    SDValue RHS = N->getOperand(1);
+
+    SDValue LHSAddr, LHSChain;
+    SDValue RHSAddr, RHSChain;
+
+    // Check if both operands are extending loads from i8
+    if (!isExtLoadFromI8(LHS, LHSAddr, LHSChain))
+      break;
+    if (!isExtLoadFromI8(RHS, RHSAddr, RHSChain))
+      break;
+
+    // Only handle simple global addresses for now (not indexed access)
+    // This is the common case for boolean variables
+    if (!isSimpleGlobalAddr(LHSAddr) || !isSimpleGlobalAddr(RHSAddr))
+      break;
+
+    // Create a new sequence that loads LHS, does the binop with RHS from memory,
+    // then zero-extends.
+    // The result will be selected in ISelDAGToDAG to generate the optimal code.
+    //
+    // For now, let the default pattern matching handle it.
+    // The key optimization is to ensure one operand stays as a load node.
+    //
+    // We can't easily restructure the DAG here because the loads may have
+    // side effects (chains). Instead, we rely on instruction selection
+    // to fold one load into the binop instruction.
+    //
+    // The actual fix is in instruction selection (ISelDAGToDAG.cpp) to
+    // recognize this pattern and generate proper code using AND_abs in 8-bit mode.
+
+    // For now, we don't transform but return early to avoid default handling
+    // causing issues. The instruction selector will handle this case.
+    break;
+  }
+  }
+
+  return SDValue();
 }

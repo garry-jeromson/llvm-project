@@ -1950,6 +1950,47 @@ let Defs = [P], mayLoad = 1, hasSideEffects = 0 in {
                        "# LDA8_sr $dst, $offset", []>;
 }
 
+// 8-bit binary operations with memory operand (zero-extended result)
+// These are used to optimize (binop (zextload i8), (zextload i8)) patterns
+// where both operands are 8-bit loads. By doing the operation in 8-bit mode,
+// we avoid needing two registers simultaneously.
+// Expands to: SEP #$20; AND/ORA/EOR addr; REP #$20; AND #$00FF
+
+// AND8_abs - 8-bit AND with memory, result zero-extended to 16-bit
+// Input: ACC16 contains first operand (already zero-extended)
+// Reads second operand from memory at addr
+// Output: ACC16 contains (low8(src) AND mem[addr]) zero-extended
+let Defs = [P], mayLoad = 1, hasSideEffects = 0, Constraints = "$src = $dst" in {
+  def AND8_abs : Pseudo<(outs ACC16:$dst), (ins ACC16:$src, addr16:$addr),
+                        "# AND8_abs $dst, $src, $addr", []>;
+}
+
+// ORA8_abs - 8-bit OR with memory, result zero-extended to 16-bit
+let Defs = [P], mayLoad = 1, hasSideEffects = 0, Constraints = "$src = $dst" in {
+  def ORA8_abs : Pseudo<(outs ACC16:$dst), (ins ACC16:$src, addr16:$addr),
+                        "# ORA8_abs $dst, $src, $addr", []>;
+}
+
+// EOR8_abs - 8-bit XOR with memory, result zero-extended to 16-bit
+let Defs = [P], mayLoad = 1, hasSideEffects = 0, Constraints = "$src = $dst" in {
+  def EOR8_abs : Pseudo<(outs ACC16:$dst), (ins ACC16:$src, addr16:$addr),
+                        "# EOR8_abs $dst, $src, $addr", []>;
+}
+
+// ADC8_abs - 8-bit ADD with memory (via ADC), result zero-extended to 16-bit
+// Note: This clears carry before the add to get a proper add (not add-with-carry)
+let Defs = [P], mayLoad = 1, hasSideEffects = 0, Constraints = "$src = $dst" in {
+  def ADC8_abs : Pseudo<(outs ACC16:$dst), (ins ACC16:$src, addr16:$addr),
+                        "# ADC8_abs $dst, $src, $addr", []>;
+}
+
+// SBC8_abs - 8-bit SUB with memory (via SBC), result zero-extended to 16-bit
+// Note: This sets carry before the subtract to get a proper sub (not sub-with-borrow)
+let Defs = [P], mayLoad = 1, hasSideEffects = 0, Constraints = "$src = $dst" in {
+  def SBC8_abs : Pseudo<(outs ACC16:$dst), (ins ACC16:$src, addr16:$addr),
+                        "# SBC8_abs $dst, $src, $addr", []>;
+}
+
 // STA8_abs - Store 8-bit value (low byte of 16-bit reg) to absolute address
 // Expands to: SEP #$20; STA addr; REP #$20
 // Note: Clobbers A during mode switch

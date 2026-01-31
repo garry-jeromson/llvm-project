@@ -1128,6 +1128,105 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     }
     break;
   }
+
+  case ISD::AND:
+  case ISD::OR:
+  case ISD::XOR:
+  case ISD::ADD:
+  case ISD::SUB: {
+    // Optimize (binop (zextload i8), (zextload i8)) pattern
+    // When both operands are 8-bit loads being zero-extended to 16-bit,
+    // we can do the operation in 8-bit mode and only need one register.
+    // This avoids register pressure issues since the W65816 only has A, X, Y.
+    //
+    // Instead of:
+    //   lda addr1 ; zext ; spill ; lda addr2 ; zext ; reload ; binop16rr
+    // We generate:
+    //   sep #32 ; lda addr1 ; binop addr2 ; rep #32 ; and #255
+
+    SDValue LHS = N->getOperand(0);
+    SDValue RHS = N->getOperand(1);
+
+    // Check if both operands are zextload from i8
+    LoadSDNode *LHSLoad = nullptr;
+    LoadSDNode *RHSLoad = nullptr;
+
+    if (auto *LD = dyn_cast<LoadSDNode>(LHS)) {
+      if (LD->getMemoryVT() == MVT::i8 &&
+          LD->getExtensionType() != ISD::NON_EXTLOAD) {
+        LHSLoad = LD;
+      }
+    }
+
+    if (auto *LD = dyn_cast<LoadSDNode>(RHS)) {
+      if (LD->getMemoryVT() == MVT::i8 &&
+          LD->getExtensionType() != ISD::NON_EXTLOAD) {
+        RHSLoad = LD;
+      }
+    }
+
+    // Only handle if both operands are 8-bit extending loads
+    if (LHSLoad && RHSLoad) {
+      SDValue LHSAddr = LHSLoad->getBasePtr();
+      SDValue RHSAddr = RHSLoad->getBasePtr();
+
+      // Check if both addresses are simple global addresses (WRAPPER nodes)
+      // This is the common case for boolean/byte variables
+      if (LHSAddr.getOpcode() == W65816ISD::WRAPPER &&
+          RHSAddr.getOpcode() == W65816ISD::WRAPPER) {
+
+        SDValue LHSInner = LHSAddr.getOperand(0);
+        SDValue RHSInner = RHSAddr.getOperand(0);
+
+        GlobalAddressSDNode *LHSGA = dyn_cast<GlobalAddressSDNode>(LHSInner);
+        GlobalAddressSDNode *RHSGA = dyn_cast<GlobalAddressSDNode>(RHSInner);
+
+        if (LHSGA && RHSGA) {
+          // Both are global addresses - we can use memory-operand form
+          // Generate: LDA8_abs addr1, then binop8_abs addr2
+
+          // Determine which pseudo instruction to use for the binop
+          unsigned BinopOpc;
+          switch (Opcode) {
+          case ISD::AND: BinopOpc = W65816::AND8_abs; break;
+          case ISD::OR:  BinopOpc = W65816::ORA8_abs; break;
+          case ISD::XOR: BinopOpc = W65816::EOR8_abs; break;
+          case ISD::ADD: BinopOpc = W65816::ADC8_abs; break;
+          case ISD::SUB: BinopOpc = W65816::SBC8_abs; break;
+          default: llvm_unreachable("Unexpected opcode");
+          }
+
+          // First load LHS with LDA8_abs
+          SDValue LHSTargetAddr = CurDAG->getTargetGlobalAddress(
+              LHSGA->getGlobal(), DL, MVT::i16, LHSGA->getOffset());
+          SDValue LHSChain = LHSLoad->getChain();
+          SDValue LHSOps[] = {LHSTargetAddr, LHSChain};
+          SDVTList LoadVTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+          MachineSDNode *LoadNode =
+              CurDAG->getMachineNode(W65816::LDA8_abs, DL, LoadVTs, LHSOps);
+          CurDAG->setNodeMemRefs(LoadNode, {LHSLoad->getMemOperand()});
+
+          // Then do the binop with RHS using memory operand form
+          SDValue RHSTargetAddr = CurDAG->getTargetGlobalAddress(
+              RHSGA->getGlobal(), DL, MVT::i16, RHSGA->getOffset());
+          // Chain the binop after the load
+          SDValue BinopChain = SDValue(LoadNode, 1);
+          // The binop takes: A (implicit from load), addr, chain
+          // Result is in A (i16, zero-extended)
+          SDValue BinopOps[] = {SDValue(LoadNode, 0), RHSTargetAddr, BinopChain};
+          SDVTList BinopVTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+          MachineSDNode *BinopNode =
+              CurDAG->getMachineNode(BinopOpc, DL, BinopVTs, BinopOps);
+          CurDAG->setNodeMemRefs(BinopNode, {RHSLoad->getMemOperand()});
+
+          ReplaceNode(N, BinopNode);
+          return;
+        }
+      }
+    }
+    break;
+  }
+
   // Note: W65816ISD::CALL and W65816ISD::FAR_CALL are handled by TableGen patterns
   // The SDNPVariadic flag ensures that argument register operands become implicit uses
   }
