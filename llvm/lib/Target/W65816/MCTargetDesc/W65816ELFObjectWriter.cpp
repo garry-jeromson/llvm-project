@@ -45,11 +45,36 @@ public:
 
   unsigned getRelocType(const MCFixup &Fixup, const MCValue &Target,
                         bool IsPCRel) const override;
+
+  bool needsRelocateWithSymbol(const MCValue &Val,
+                               unsigned Type) const override;
 };
 
 W65816ELFObjectWriter::W65816ELFObjectWriter(uint8_t OSABI)
     : MCELFObjectTargetWriter(/*Is64Bit=*/false, OSABI, EM_W65816,
                                /*HasRelocationAddend=*/true) {}
+
+bool W65816ELFObjectWriter::needsRelocateWithSymbol(const MCValue &Val,
+                                                     unsigned Type) const {
+  // For the W65816, we need relocations for absolute address references
+  // because the final memory layout (where .text, .data, .rodata, etc. are
+  // placed) isn't known until link time.
+  switch (Type) {
+  case R_W65816_16:
+  case R_W65816_24:
+  case R_W65816_8:
+    // Absolute addresses need relocation
+    return true;
+
+  case R_W65816_8_PCREL:
+  case R_W65816_16_PCREL:
+    // PC-relative can be resolved locally
+    return false;
+
+  default:
+    return false;
+  }
+}
 
 unsigned W65816ELFObjectWriter::getRelocType(const MCFixup &Fixup,
                                               const MCValue &Target,

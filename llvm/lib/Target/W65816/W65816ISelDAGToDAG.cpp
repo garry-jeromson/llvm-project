@@ -148,14 +148,33 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
   }
 
   case W65816ISD::WRAPPER: {
-    // WRAPPER just contains the target address - select it as-is
-    // The inner TargetGlobalAddress will be used directly
-    SDValue Addr = N->getOperand(0);
-    // For WRAPPER nodes used as addresses, we let the pattern matching
-    // handle them via SelectAddr. If WRAPPER is used standalone,
-    // we need to materialize the address.
-    // For now, just replace with the inner address
-    ReplaceNode(N, Addr.getNode());
+    // WRAPPER contains a target address. When used as an address operand
+    // of a load/store, it's handled by those patterns. But when used as
+    // a value (e.g., passed to a phi node or function call), we need to
+    // materialize the address into a register using MOV16ri.
+    SDValue Inner = N->getOperand(0);
+
+    if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+      // Create a target global address and load it into a register
+      SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
+          GA->getGlobal(), DL, MVT::i16, GA->getOffset());
+      MachineSDNode *Load =
+          CurDAG->getMachineNode(W65816::MOV16ri, DL, MVT::i16, TargetAddr);
+      ReplaceNode(N, Load);
+      return;
+    }
+
+    if (ExternalSymbolSDNode *ES = dyn_cast<ExternalSymbolSDNode>(Inner)) {
+      SDValue TargetSym = CurDAG->getTargetExternalSymbol(
+          ES->getSymbol(), MVT::i16);
+      MachineSDNode *Load =
+          CurDAG->getMachineNode(W65816::MOV16ri, DL, MVT::i16, TargetSym);
+      ReplaceNode(N, Load);
+      return;
+    }
+
+    // Fallback: just replace with the inner address (may cause issues)
+    ReplaceNode(N, Inner.getNode());
     return;
   }
 

@@ -54,6 +54,10 @@ public:
 
   bool writeNopData(raw_ostream &OS, uint64_t Count,
                     const MCSubtargetInfo *STI) const override;
+
+  std::optional<bool> evaluateFixup(const MCFragment &F, MCFixup &Fixup,
+                                    MCValue &Target,
+                                    uint64_t &Value) override;
 };
 
 void W65816AsmBackend::adjustFixupValue(const MCFixup &Fixup,
@@ -204,6 +208,32 @@ bool W65816AsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
     OS << static_cast<char>(0xEA);
   }
   return true;
+}
+
+std::optional<bool> W65816AsmBackend::evaluateFixup(const MCFragment &F,
+                                                     MCFixup &Fixup,
+                                                     MCValue &Target,
+                                                     uint64_t &Value) {
+  // For absolute address fixups, force a relocation to be generated
+  // because the final memory layout isn't known until link time.
+  // This is especially important for cross-section references (e.g.,
+  // code referencing .rodata).
+  unsigned Kind = Fixup.getKind();
+
+  switch (Kind) {
+  case W65816::fixup_w65816_16:
+  case W65816::fixup_w65816_24:
+  case W65816::fixup_w65816_imm16:
+    // Always force relocation for address-type fixups
+    // The final memory layout isn't known until link time
+    return false;  // Not resolved - will generate relocation
+
+  default:
+    break;
+  }
+
+  // Use default handling
+  return std::nullopt;
 }
 
 } // end anonymous namespace

@@ -2619,27 +2619,39 @@ bool W65816ExpandPseudo::expandMOV16ri(Block &MBB, BlockIt MBBI) {
   MachineInstr &MI = *MBBI;
   DebugLoc DL = MI.getDebugLoc();
 
-  // MOV16ri $dst, $imm
-  // Load immediate into any GPR16 register (including imaginary)
+  // MOV16ri $dst, $imm_or_addr
+  // Load immediate or global address into any GPR16 register (including imaginary)
   // Expanded to: LDA #imm, LDX #imm, LDY #imm, or LDA #imm + STA $dp
 
   Register DstReg = MI.getOperand(0).getReg();
-  int64_t Imm = MI.getOperand(1).getImm();
+  MachineOperand &SrcOp = MI.getOperand(1);
+
+  // Helper lambda to add the source operand (either immediate or global address)
+  auto addSrcOperand = [&](MachineInstrBuilder &MIB) {
+    if (SrcOp.isImm()) {
+      MIB.addImm(SrcOp.getImm());
+    } else if (SrcOp.isGlobal()) {
+      MIB.addGlobalAddress(SrcOp.getGlobal(), SrcOp.getOffset(),
+                           SrcOp.getTargetFlags());
+    } else {
+      llvm_unreachable("MOV16ri with unsupported operand type");
+    }
+  };
 
   if (DstReg == W65816::A) {
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A)
-        .addImm(Imm);
+    auto MIB = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A);
+    addSrcOperand(MIB);
   } else if (DstReg == W65816::X) {
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_imm16), W65816::X)
-        .addImm(Imm);
+    auto MIB = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_imm16), W65816::X);
+    addSrcOperand(MIB);
   } else if (DstReg == W65816::Y) {
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
-        .addImm(Imm);
+    auto MIB = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y);
+    addSrcOperand(MIB);
   } else if (W65816::IMAG16RegClass.contains(DstReg)) {
     // Imaginary register: LDA #imm + STA $dp
     unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A)
-        .addImm(Imm);
+    auto MIB = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A);
+    addSrcOperand(MIB);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
         .addImm(DPAddr);

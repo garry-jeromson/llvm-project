@@ -123,9 +123,11 @@ def imm8 : Operand<i8> {
 
 // 16-bit immediate operand
 // Uses printImm16 to ensure negative values are printed as unsigned
+// EncoderMethod creates fixups for symbol references
 def imm16 : Operand<i16> {
   let ParserMatchClass = Imm16AsmOperand;
   let PrintMethod = "printImm16";
+  let EncoderMethod = "encodeImmediate";
 }
 
 // 24-bit long address operand (stored in i32, high 8 bits ignored)
