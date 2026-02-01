@@ -370,6 +370,22 @@ let mayStore = 1, hasSideEffects = 0 in {
                            "# SPILL_GPR16 $src, $fi", []>;
 }
 
+// LDA_sr_off - Load from frame index + constant offset
+// Used for array/struct access: arr[i] where arr is on stack
+// Expanded to: LDA (fi + offset),S
+let mayLoad = 1, hasSideEffects = 0, Defs = [P] in {
+  def LDA_sr_off : Pseudo<(outs GPR16:$dst), (ins i16imm:$fi, i16imm:$offset),
+                          "# LDA_sr_off $dst, $fi + $offset", []>;
+}
+
+// STA_sr_off - Store to frame index + constant offset
+// Used for array/struct access: arr[i] = val where arr is on stack
+// Expanded to: STA (fi + offset),S
+let mayStore = 1, hasSideEffects = 0 in {
+  def STA_sr_off : Pseudo<(outs), (ins GPR16:$src, i16imm:$fi, i16imm:$offset),
+                          "# STA_sr_off $src, $fi + $offset", []>;
+}
+
 // LEA_fi - Load Effective Address of frame index into a GPR16 register
 // Used when a stack address needs to be passed as a value (e.g., to a call).
 // Expanded to: TSX/TXA + CLC + ADC #offset (computes SP + offset)

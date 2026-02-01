@@ -1902,6 +1902,12 @@ bool W65816ExpandPseudo::expandLDAindirect(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Destination is an imaginary register - store A to Direct Page
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
   // If DstReg == A, result is already there
 
@@ -2088,6 +2094,12 @@ bool W65816ExpandPseudo::expandLDAindirectIdx(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Destination is an imaginary register - store A to Direct Page
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
   // If DstReg == A, result is already there
 

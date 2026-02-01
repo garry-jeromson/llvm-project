@@ -181,6 +181,30 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
       Opcode == W65816::RELOAD_GPR16 || Opcode == W65816::SPILL_GPR16) {
     // Change the frame index operand to an immediate offset
     Inst.getOperand(FIOperandNum).ChangeToImmediate(Offset);
+  } else if (Opcode == W65816::LDA_sr_off) {
+    // LDA_sr_off $dst, $fi, $constant_offset
+    // Combine frame offset + constant offset, then convert to regular load
+    int64_t ConstOffset = Inst.getOperand(FIOperandNum + 1).getImm();
+    int64_t CombinedOffset = Offset + ConstOffset;
+
+    // Change to RELOAD_GPR16 which handles the GPR16 destination
+    // (will be expanded to LDA_sr + transfer if needed)
+    Inst.setDesc(TII.get(W65816::RELOAD_GPR16));
+    Inst.getOperand(FIOperandNum).ChangeToImmediate(CombinedOffset);
+    // Remove the extra offset operand
+    Inst.removeOperand(FIOperandNum + 1);
+  } else if (Opcode == W65816::STA_sr_off) {
+    // STA_sr_off $src, $fi, $constant_offset
+    // Combine frame offset + constant offset, then convert to regular store
+    int64_t ConstOffset = Inst.getOperand(FIOperandNum + 1).getImm();
+    int64_t CombinedOffset = Offset + ConstOffset;
+
+    // Change to SPILL_GPR16 which handles the GPR16 source
+    // (will be expanded to transfer + STA_sr if needed)
+    Inst.setDesc(TII.get(W65816::SPILL_GPR16));
+    Inst.getOperand(FIOperandNum).ChangeToImmediate(CombinedOffset);
+    // Remove the extra offset operand
+    Inst.removeOperand(FIOperandNum + 1);
   } else {
     // For other instructions, we may need different handling
     // For now, just replace with immediate

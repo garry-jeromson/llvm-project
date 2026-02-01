@@ -486,17 +486,103 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
+      // Check for frame index + constant offset: (store val, (add frameindex, const))
+      // This is the common pattern for local array/struct access: arr[i] = val
+      // Use simple STA_sr with combined offset
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check for (add frameindex, constant) pattern
+        FrameIndexSDNode *FIN = nullptr;
+        ConstantSDNode *CN = nullptr;
+
+        if (isa<FrameIndexSDNode>(LHS) && isa<ConstantSDNode>(RHS)) {
+          FIN = cast<FrameIndexSDNode>(LHS);
+          CN = cast<ConstantSDNode>(RHS);
+        } else if (isa<FrameIndexSDNode>(RHS) && isa<ConstantSDNode>(LHS)) {
+          FIN = cast<FrameIndexSDNode>(RHS);
+          CN = cast<ConstantSDNode>(LHS);
+        }
+
+        if (FIN && CN) {
+          // Use STA_sr with frame index + constant offset
+          // Frame lowering will resolve this to the final stack offset
+          int FI = FIN->getIndex();
+          int64_t Offset = CN->getSExtValue();
+          SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
+
+          // Create a new frame index with the offset applied
+          // We encode the offset as an additional operand that will be
+          // added during frame lowering
+          SDValue OffsetVal = CurDAG->getTargetConstant(Offset, DL, MVT::i16);
+          SDValue Ops[] = {Value, TFI, OffsetVal, Chain};
+          MachineSDNode *Store =
+              CurDAG->getMachineNode(W65816::STA_sr_off, DL, MVT::Other, Ops);
+
+          CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+          ReplaceNode(N, Store);
+          return;
+        }
+      }
+
+      // Check for frame index + variable offset: (store val, (add frameindex, reg))
+      // This handles arr[i] = val where arr is on stack and i is a variable
+      // We need to compute the frame address first, then use indexed indirect
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check for (add frameindex, variable) pattern
+        FrameIndexSDNode *FIN = nullptr;
+        SDValue VarOffset;
+
+        if (isa<FrameIndexSDNode>(LHS) && !isa<ConstantSDNode>(RHS)) {
+          FIN = cast<FrameIndexSDNode>(LHS);
+          VarOffset = RHS;
+        } else if (isa<FrameIndexSDNode>(RHS) && !isa<ConstantSDNode>(LHS)) {
+          FIN = cast<FrameIndexSDNode>(RHS);
+          VarOffset = LHS;
+        }
+
+        if (FIN) {
+          // First compute the frame address using LEA_fi
+          int FI = FIN->getIndex();
+          SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
+          MachineSDNode *LEA = CurDAG->getMachineNode(W65816::LEA_fi, DL, MVT::i16, TFI);
+          SDValue BaseAddr = SDValue(LEA, 0);
+
+          // Now use STAindirectIdx with the computed address and variable offset
+          MachineFunction &MF = CurDAG->getMachineFunction();
+          MachineFrameInfo &MFI = MF.getFrameInfo();
+
+          int StackFI = MFI.CreateStackObject(2, Align(2), false);
+          SDValue StackSlot = CurDAG->getTargetFrameIndex(StackFI, MVT::i16);
+
+          SDValue Ops[] = {Value, StackSlot, BaseAddr, VarOffset, Chain};
+          MachineSDNode *Store =
+              CurDAG->getMachineNode(W65816::STAindirectIdx, DL, MVT::Other, Ops);
+
+          CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
+          ReplaceNode(N, Store);
+          return;
+        }
+      }
+
       // Check for indexed pointer store: (store val, (add ptr, offset))
-      // where ptr is a register and offset is computed
+      // where ptr is a register and offset is computed (not a frame index case)
       if (Addr.getOpcode() == ISD::ADD) {
         SDValue LHS = Addr.getOperand(0);
         SDValue RHS = Addr.getOperand(1);
 
         // Check if this is (add ptr, byte_offset) where neither is a global
+        // and not a frame index (those are handled above)
         bool LHSIsWrapper = (LHS.getOpcode() == W65816ISD::WRAPPER);
         bool RHSIsWrapper = (RHS.getOpcode() == W65816ISD::WRAPPER);
+        bool LHSIsFrameIndex = isa<FrameIndexSDNode>(LHS);
+        bool RHSIsFrameIndex = isa<FrameIndexSDNode>(RHS);
 
-        if (!LHSIsWrapper && !RHSIsWrapper) {
+        if (!LHSIsWrapper && !RHSIsWrapper && !LHSIsFrameIndex && !RHSIsFrameIndex) {
           // This is indexed pointer store: ptr[i] = val
           MachineFunction &MF = CurDAG->getMachineFunction();
           MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -902,6 +988,87 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
+      // Check for frame index + constant offset: (load (add frameindex, const))
+      // This is the common pattern for local array/struct access: arr[i]
+      // Use simple LDA_sr with combined offset
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check for (add frameindex, constant) pattern
+        FrameIndexSDNode *FIN = nullptr;
+        ConstantSDNode *CN = nullptr;
+
+        if (isa<FrameIndexSDNode>(LHS) && isa<ConstantSDNode>(RHS)) {
+          FIN = cast<FrameIndexSDNode>(LHS);
+          CN = cast<ConstantSDNode>(RHS);
+        } else if (isa<FrameIndexSDNode>(RHS) && isa<ConstantSDNode>(LHS)) {
+          FIN = cast<FrameIndexSDNode>(RHS);
+          CN = cast<ConstantSDNode>(LHS);
+        }
+
+        if (FIN && CN) {
+          // Use LDA_sr_off with frame index + constant offset
+          // Frame lowering will resolve this to the final stack offset
+          int FI = FIN->getIndex();
+          int64_t Offset = CN->getSExtValue();
+          SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
+          SDValue OffsetVal = CurDAG->getTargetConstant(Offset, DL, MVT::i16);
+          SDValue Ops[] = {TFI, OffsetVal, Chain};
+          SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+          MachineSDNode *Load =
+              CurDAG->getMachineNode(W65816::LDA_sr_off, DL, VTs, Ops);
+
+          CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+          ReplaceNode(N, Load);
+          return;
+        }
+      }
+
+      // Check for frame index + variable offset: (load (add frameindex, reg))
+      // This handles arr[i] where arr is on stack and i is a variable
+      // We need to compute the frame address first, then use indexed indirect
+      if (Addr.getOpcode() == ISD::ADD) {
+        SDValue LHS = Addr.getOperand(0);
+        SDValue RHS = Addr.getOperand(1);
+
+        // Check for (add frameindex, variable) pattern
+        FrameIndexSDNode *FIN = nullptr;
+        SDValue VarOffset;
+
+        if (isa<FrameIndexSDNode>(LHS) && !isa<ConstantSDNode>(RHS)) {
+          FIN = cast<FrameIndexSDNode>(LHS);
+          VarOffset = RHS;
+        } else if (isa<FrameIndexSDNode>(RHS) && !isa<ConstantSDNode>(LHS)) {
+          FIN = cast<FrameIndexSDNode>(RHS);
+          VarOffset = LHS;
+        }
+
+        if (FIN) {
+          // First compute the frame address using LEA_fi
+          int FI = FIN->getIndex();
+          SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
+          MachineSDNode *LEA = CurDAG->getMachineNode(W65816::LEA_fi, DL, MVT::i16, TFI);
+          SDValue BaseAddr = SDValue(LEA, 0);
+
+          // Now use LDAindirectIdx with the computed address and variable offset
+          MachineFunction &MF = CurDAG->getMachineFunction();
+          MachineFrameInfo &MFI = MF.getFrameInfo();
+
+          int StackFI = MFI.CreateStackObject(2, Align(2), false);
+          SDValue StackSlot = CurDAG->getTargetFrameIndex(StackFI, MVT::i16);
+
+          SDValue Ops[] = {StackSlot, BaseAddr, VarOffset, Chain};
+          SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+          MachineSDNode *Load =
+              CurDAG->getMachineNode(W65816::LDAindirectIdx, DL, VTs, Ops);
+
+          CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+          ReplaceNode(N, Load);
+          return;
+        }
+      }
+
       // Check for indexed pointer access: (load (add ptr, offset))
       // where ptr is a register and offset is computed (e.g., i*2 for i16 arrays)
       // This handles ptr[i] where ptr is in a register
@@ -910,11 +1077,13 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         SDValue RHS = Addr.getOperand(1);
 
         // Check if this is (add ptr, byte_offset) where neither is a global
-        // (global indexed access is handled above)
+        // and not a frame index (those are handled above)
         bool LHSIsWrapper = (LHS.getOpcode() == W65816ISD::WRAPPER);
         bool RHSIsWrapper = (RHS.getOpcode() == W65816ISD::WRAPPER);
+        bool LHSIsFrameIndex = isa<FrameIndexSDNode>(LHS);
+        bool RHSIsFrameIndex = isa<FrameIndexSDNode>(RHS);
 
-        if (!LHSIsWrapper && !RHSIsWrapper) {
+        if (!LHSIsWrapper && !RHSIsWrapper && !LHSIsFrameIndex && !RHSIsFrameIndex) {
           // This is indexed pointer access: ptr[i]
           // LHS is typically the base pointer, RHS is the byte offset
           // We'll use stack-relative indirect indexed addressing:
