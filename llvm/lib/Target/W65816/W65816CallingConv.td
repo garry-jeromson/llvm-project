@@ -27,6 +27,8 @@ def RetCC_W65816 : CallingConv<[
 // W65816 Argument Calling Conventions
 //===----------------------------------------------------------------------===//
 
+// Used for both regular and variadic functions.
+// For varargs, fixed args use registers as normal; variadic args go on stack.
 def CC_W65816 : CallingConv<[
   // First i8 argument goes in AL
   CCIfType<[i8], CCAssignToReg<[AL, XL, YL]>>,
@@ -35,13 +37,6 @@ def CC_W65816 : CallingConv<[
   CCIfType<[i16], CCAssignToReg<[A, X, Y]>>,
 
   // Remaining arguments are passed on the stack, 2-byte aligned
-  CCIfType<[i8], CCAssignToStack<1, 1>>,
-  CCIfType<[i16], CCAssignToStack<2, 2>>,
-  CCIfType<[i32], CCAssignToStack<4, 2>>
-]>;
-
-// Calling convention for variadic functions - all args on stack
-def CC_W65816_Vararg : CallingConv<[
   CCIfType<[i8], CCAssignToStack<1, 1>>,
   CCIfType<[i16], CCAssignToStack<2, 2>>,
   CCIfType<[i32], CCAssignToStack<4, 2>>

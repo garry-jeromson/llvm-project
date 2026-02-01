@@ -35,12 +35,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "w65816-lower"
 
-// Silence warning about CC_W65816_Vararg being unused.
-// It's defined for future vararg calling convention support.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-function"
 #include "W65816GenCallingConv.inc"
-#pragma clang diagnostic pop
 
 W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
                                            const W65816Subtarget &STI)
@@ -597,63 +592,9 @@ SDValue W65816TargetLowering::LowerLoad(SDValue Op, SelectionDAG &DAG) const {
       return SDValue();
   }
 
-  // For loading through a pointer in a register, we need to:
-  // 1. Store the pointer to a stack slot
-  // 2. Use stack-relative indirect addressing LDA (offset,S),Y
-  //
-  // Create a new stack object to hold the pointer
-  MachineFunction &MF = DAG.getMachineFunction();
-  MachineFrameInfo &MFI = MF.getFrameInfo();
-  int FI = MFI.CreateStackObject(2, Align(2), false);
-  SDValue StackSlot = DAG.getFrameIndex(FI, MVT::i16);
-
-  // Store the pointer address to the stack slot
-  // Note: Store is created here for future use when stack-relative indirect
-  // addressing is fully integrated. Currently we return SDValue() below.
-  [[maybe_unused]] SDValue Store = DAG.getStore(Chain, DL, Addr, StackSlot,
-                               MachinePointerInfo::getFixedStack(MF, FI));
-
-  // Now create a load using the indirect addressing
-  // For simple dereference (*ptr), the index is 0
-  // For ptr[i], the index would be i*2 (byte offset)
-  //
-  // For now, we only handle simple dereference with index 0
-  // TODO: Handle indexed access by checking if original Addr was (add ptr, idx)
-
-  // We need to emit the indirect load using our pseudo instruction
-  // Since we're in DAG lowering, we can't easily emit the pseudo directly.
-  // Instead, we'll create a load from the stack slot (the pointer value)
-  // and then dereference it.
-  //
-  // The challenge is that we need TWO loads:
-  // 1. Load the pointer from the stack slot (to get the address)
-  // 2. Load from that address (the actual dereference)
-  //
-  // But load #1 puts the pointer in a register, and we can't do load #2
-  // from a register directly - that's our original problem!
-  //
-  // The solution is to use LDA (offset,S),Y which does both in one instruction:
-  // - Reads the 16-bit pointer from (SP + offset)
-  // - Adds Y to that pointer
-  // - Loads from the resulting address
-  //
-  // But we can't easily express this in the DAG. Instead, we'll
-  // emit a custom node that will be selected to use this instruction.
-
-  // For now, just emit an error for unsupported pointer loads
-  // This case requires stack-relative indirect which we've defined
-  // but haven't fully integrated into selection yet.
-  //
-  // As a workaround, we can emit the sequence:
-  // 1. Store ptr to stack
-  // 2. LDY #0
-  // 3. LDA (offset,S),Y
-  //
-  // Create the load using the frame index - this will later be
-  // selected as a stack-relative indirect load
-
-  // Actually, let's return SDValue() and let it fail cleanly,
-  // then we can add special handling in ISelDAGToDAG for this pattern
+  // For other pointer loads (e.g., through a register), let default
+  // selection handle it. Stack-relative indirect addressing LDA (offset,S),Y
+  // could be used here in the future for more efficient codegen.
   return SDValue();
 }
 

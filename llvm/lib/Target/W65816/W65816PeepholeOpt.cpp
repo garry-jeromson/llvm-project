@@ -29,6 +29,16 @@
 //    - PHX; PLX -> (delete both, value stays in X)
 //    - PHY; PLY -> (delete both, value stays in Y)
 //
+// 5. Eliminating redundant increment/decrement pairs:
+//    - INX; DEX -> (delete both)
+//    - DEX; INX -> (delete both)
+//    - INY; DEY -> (delete both)
+//    - DEY; INY -> (delete both)
+//
+// 6. Simplifying load-transfer sequences:
+//    - LDA #imm; TAX -> LDX #imm (direct load is more efficient)
+//    - LDA #imm; TAY -> LDY #imm (direct load is more efficient)
+//
 //===----------------------------------------------------------------------===//
 
 #include "W65816.h"
@@ -95,6 +105,15 @@ static bool isCancellingFlagOp(unsigned First, unsigned Second) {
          (First == W65816::CLC && Second == W65816::SEC);
 }
 
+/// Check if two opcodes form a redundant increment/decrement pair.
+/// Returns true for: INX/DEX, DEX/INX, INY/DEY, DEY/INY
+static bool isRedundantIncDecPair(unsigned First, unsigned Second) {
+  return (First == W65816::INX && Second == W65816::DEX) ||
+         (First == W65816::DEX && Second == W65816::INX) ||
+         (First == W65816::INY && Second == W65816::DEY) ||
+         (First == W65816::DEY && Second == W65816::INY);
+}
+
 bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
   bool Modified = false;
 
@@ -154,6 +173,50 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
       MBBI = NextMBBI;
       Modified = true;
       continue;
+    }
+
+    // Check for redundant increment/decrement pairs (INX/DEX, INY/DEY, etc.)
+    if (isRedundantIncDecPair(Opcode, NextOpcode)) {
+      LLVM_DEBUG(dbgs() << "Removing redundant inc/dec pair:\n  "
+                        << MI << "  " << NextMI);
+      auto AfterNext = std::next(NextMBBI);
+      MBB.erase(MBBI);
+      MBB.erase(NextMBBI);
+      MBBI = AfterNext;
+      Modified = true;
+      continue;
+    }
+
+    // Check for LDA #imm; TAX -> LDX #imm optimization
+    if (Opcode == W65816::LDA_imm16 && NextOpcode == W65816::TAX) {
+      // Verify LDA has an immediate operand
+      if (MI.getNumOperands() > 0 && MI.getOperand(0).isImm()) {
+        LLVM_DEBUG(dbgs() << "Replacing LDA #imm; TAX with LDX #imm:\n  "
+                          << MI << "  " << NextMI);
+        // Replace LDA with LDX (keeps the same immediate operand)
+        MI.setDesc(MBB.getParent()->getSubtarget().getInstrInfo()->get(W65816::LDX_imm16));
+        // Remove TAX
+        MBB.erase(NextMBBI);
+        Modified = true;
+        // Don't advance - check for more optimizations on this instruction
+        continue;
+      }
+    }
+
+    // Check for LDA #imm; TAY -> LDY #imm optimization
+    if (Opcode == W65816::LDA_imm16 && NextOpcode == W65816::TAY) {
+      // Verify LDA has an immediate operand
+      if (MI.getNumOperands() > 0 && MI.getOperand(0).isImm()) {
+        LLVM_DEBUG(dbgs() << "Replacing LDA #imm; TAY with LDY #imm:\n  "
+                          << MI << "  " << NextMI);
+        // Replace LDA with LDY (keeps the same immediate operand)
+        MI.setDesc(MBB.getParent()->getSubtarget().getInstrInfo()->get(W65816::LDY_imm16));
+        // Remove TAY
+        MBB.erase(NextMBBI);
+        Modified = true;
+        // Don't advance - check for more optimizations on this instruction
+        continue;
+      }
     }
 
     ++MBBI;
