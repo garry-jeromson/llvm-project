@@ -32,9 +32,10 @@ declare i16 @external_vararg(i16, ...)
 ; CHECK-LABEL: call_vararg_4args:
 ; CHECK: lda #30
 ; CHECK: sta {{[0-9]+}},s
-; CHECK: lda #3
-; CHECK: ldx #10
+; Arguments are set up in reverse order (Y, X, A) to avoid A clobbering
 ; CHECK: ldy #20
+; CHECK: ldx #10
+; CHECK: lda #3
 ; CHECK: jsr external_vararg
 ; CHECK: rts
 define i16 @call_vararg_4args() {

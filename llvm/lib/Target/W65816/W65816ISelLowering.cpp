@@ -1010,9 +1010,13 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   if (!MemOpChains.empty())
     Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, MemOpChains);
 
-  // Copy arguments to registers
-  for (auto &Reg : RegsToPass) {
-    Chain = DAG.getCopyToReg(Chain, DL, Reg.first, Reg.second, Glue);
+  // Copy arguments to registers in reverse order (Y, X, A).
+  // This is critical because copying to X or Y requires going through A
+  // (TAX/TAY), which would clobber A if we set A first. By copying to
+  // Y first, then X, then A last, we ensure A has the correct value
+  // at call time.
+  for (auto it = RegsToPass.rbegin(); it != RegsToPass.rend(); ++it) {
+    Chain = DAG.getCopyToReg(Chain, DL, it->first, it->second, Glue);
     Glue = Chain.getValue(1);
   }
 
