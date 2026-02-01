@@ -35,7 +35,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "w65816-lower"
 
+// Silence warning about CC_W65816_Vararg being unused.
+// It's defined for future vararg calling convention support.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 #include "W65816GenCallingConv.inc"
+#pragma clang diagnostic pop
 
 W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
                                            const W65816Subtarget &STI)
@@ -603,7 +608,9 @@ SDValue W65816TargetLowering::LowerLoad(SDValue Op, SelectionDAG &DAG) const {
   SDValue StackSlot = DAG.getFrameIndex(FI, MVT::i16);
 
   // Store the pointer address to the stack slot
-  SDValue Store = DAG.getStore(Chain, DL, Addr, StackSlot,
+  // Note: Store is created here for future use when stack-relative indirect
+  // addressing is fully integrated. Currently we return SDValue() below.
+  [[maybe_unused]] SDValue Store = DAG.getStore(Chain, DL, Addr, StackSlot,
                                MachinePointerInfo::getFixedStack(MF, FI));
 
   // Now create a load using the indirect addressing

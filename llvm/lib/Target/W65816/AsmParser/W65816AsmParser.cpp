@@ -362,7 +362,12 @@ public:
 
 #define GET_REGISTER_MATCHER
 #define GET_MATCHER_IMPLEMENTATION
+// Silence warnings about generated functions that we don't use directly.
+// We have our own matchRegisterName that handles case-insensitive matching.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 #include "W65816GenAsmMatcher.inc"
+#pragma clang diagnostic pop
 
 MCRegister W65816AsmParser::matchRegisterName(StringRef Name) {
   // Handle register names (case-insensitive)
