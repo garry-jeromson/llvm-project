@@ -185,7 +185,18 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::SRA, MVT::i8, Promote);
   }
 
-  // Min/max signed and unsigned
+  // Saturating arithmetic - expand to basic operations
+  setOperationAction(ISD::USUBSAT, MVT::i16, Expand);
+  setOperationAction(ISD::SSUBSAT, MVT::i16, Expand);
+  setOperationAction(ISD::UADDSAT, MVT::i16, Expand);
+  setOperationAction(ISD::SADDSAT, MVT::i16, Expand);
+
+  // Min/max - expand to select + compare
+  setOperationAction(ISD::UMIN, MVT::i16, Expand);
+  setOperationAction(ISD::UMAX, MVT::i16, Expand);
+  setOperationAction(ISD::SMIN, MVT::i16, Expand);
+  setOperationAction(ISD::SMAX, MVT::i16, Expand);
+
   setMinimumJumpTableEntries(INT_MAX); // Don't use jump tables
 
   // Varargs support
