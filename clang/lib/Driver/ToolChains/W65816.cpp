@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "W65816.h"
+#include "clang/Basic/DiagnosticDriver.h"
 #include "clang/Driver/CommonArgs.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/InputInfo.h"
@@ -23,6 +24,28 @@ using namespace llvm::opt;
 W65816ToolChain::W65816ToolChain(const Driver &D, const llvm::Triple &Triple,
                                  const ArgList &Args)
     : Generic_ELF(D, Triple, Args) {
+}
+
+void W65816ToolChain::addClangTargetOptions(
+    const llvm::opt::ArgList &DriverArgs, llvm::opt::ArgStringList &CC1Args,
+    Action::OffloadKind DeviceOffloadKind) const {
+  // The W65816 has only 3 physical registers (A, X, Y). Code compiled without
+  // optimization (-O0) creates excessive register pressure that almost always
+  // causes "ran out of registers" errors. Require at least -O1.
+  const Driver &D = getDriver();
+
+  if (Arg *A = DriverArgs.getLastArg(options::OPT_O_Group)) {
+    // -O0 is explicitly unsupported
+    if (A->getOption().matches(options::OPT_O0)) {
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << "-O0" << getTriple().str();
+    }
+  } else {
+    // No optimization flag specified - default to -O1 instead of -O0
+    // This is necessary because the W65816's limited register set requires
+    // optimization passes to reduce register pressure.
+    CC1Args.push_back("-O1");
+  }
 }
 
 Tool *W65816ToolChain::buildLinker() const {

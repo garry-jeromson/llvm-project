@@ -33,6 +33,10 @@ public:
     return UNW_None;
   }
 
+  void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
+                             llvm::opt::ArgStringList &CC1Args,
+                             Action::OffloadKind DeviceOffloadKind) const override;
+
 protected:
   Tool *buildLinker() const override;
 };
