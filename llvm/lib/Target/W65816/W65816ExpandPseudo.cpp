@@ -2678,8 +2678,14 @@ bool W65816ExpandPseudo::expandINC16(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::INX);
   } else if (Reg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::INY);
+  } else if (W65816::IMAG16RegClass.contains(Reg)) {
+    // Increment imaginary register: load to A, INC A, store back
+    unsigned DPAddr = getImaginaryRegDPAddr(Reg);
+    buildMI(MBB, MBBI, W65816::LDA_dp, W65816::A).addImm(DPAddr);
+    buildMI(MBB, MBBI, W65816::INC_A);
+    buildMI(MBB, MBBI, W65816::STA_dp).addReg(W65816::A).addImm(DPAddr);
   } else {
-    llvm_unreachable("INC16 with non-physical register");
+    llvm_unreachable("INC16 with invalid register");
   }
 
   MI.eraseFromParent();
@@ -2700,8 +2706,14 @@ bool W65816ExpandPseudo::expandDEC16(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::DEX);
   } else if (Reg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::DEY);
+  } else if (W65816::IMAG16RegClass.contains(Reg)) {
+    // Decrement imaginary register: load to A, DEC A, store back
+    unsigned DPAddr = getImaginaryRegDPAddr(Reg);
+    buildMI(MBB, MBBI, W65816::LDA_dp, W65816::A).addImm(DPAddr);
+    buildMI(MBB, MBBI, W65816::DEC_A);
+    buildMI(MBB, MBBI, W65816::STA_dp).addReg(W65816::A).addImm(DPAddr);
   } else {
-    llvm_unreachable("DEC16 with non-physical register");
+    llvm_unreachable("DEC16 with invalid register");
   }
 
   MI.eraseFromParent();
@@ -2848,56 +2860,58 @@ bool W65816ExpandPseudo::expandSelect16Signed(Block &MBB, BlockIt MBBI,
   }
 
   // TrueMBB: copy trueVal to dst, then jump to sink
+  // Strategy: get TrueReg to A, then move to DstReg
   if (TrueReg != DstReg) {
-    if (TrueReg == W65816::A) {
-      if (DstReg == W65816::X) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TAX));
-      } else if (DstReg == W65816::Y) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TAY));
-      }
-    } else if (TrueReg == W65816::X) {
-      if (DstReg == W65816::A) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TXA));
-      } else if (DstReg == W65816::Y) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TXA));
-        BuildMI(TrueMBB, DL, TII->get(W65816::TAY));
-      }
+    // First get TrueReg value into A (if not already)
+    if (TrueReg == W65816::X) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TXA));
     } else if (TrueReg == W65816::Y) {
-      if (DstReg == W65816::A) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TYA));
-      } else if (DstReg == W65816::X) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TYA));
-        BuildMI(TrueMBB, DL, TII->get(W65816::TAX));
-      }
+      BuildMI(TrueMBB, DL, TII->get(W65816::TYA));
+    } else if (W65816::IMAG16RegClass.contains(TrueReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(TrueReg);
+      BuildMI(TrueMBB, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
     }
+    // TrueReg == A means value is already in A
+
+    // Now move A to DstReg
+    if (DstReg == W65816::X) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TAX));
+    } else if (DstReg == W65816::Y) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TAY));
+    } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+      BuildMI(TrueMBB, DL, TII->get(W65816::STA_dp)).addReg(W65816::A).addImm(DPAddr);
+    }
+    // DstReg == A means result is already in place
   }
   // Fall through to SinkMBB (no explicit branch needed if TrueMBB is right before SinkMBB)
   // But since FalseMBB is between them, we need a branch
   BuildMI(TrueMBB, DL, TII->get(W65816::BRA)).addMBB(SinkMBB);
 
   // FalseMBB: copy falseVal to dst
+  // Strategy: get FalseReg to A, then move to DstReg
   if (FalseReg != DstReg) {
-    if (FalseReg == W65816::A) {
-      if (DstReg == W65816::X) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TAX));
-      } else if (DstReg == W65816::Y) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TAY));
-      }
-    } else if (FalseReg == W65816::X) {
-      if (DstReg == W65816::A) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TXA));
-      } else if (DstReg == W65816::Y) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TXA));
-        BuildMI(FalseMBB, DL, TII->get(W65816::TAY));
-      }
+    // First get FalseReg value into A (if not already)
+    if (FalseReg == W65816::X) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TXA));
     } else if (FalseReg == W65816::Y) {
-      if (DstReg == W65816::A) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TYA));
-      } else if (DstReg == W65816::X) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TYA));
-        BuildMI(FalseMBB, DL, TII->get(W65816::TAX));
-      }
+      BuildMI(FalseMBB, DL, TII->get(W65816::TYA));
+    } else if (W65816::IMAG16RegClass.contains(FalseReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(FalseReg);
+      BuildMI(FalseMBB, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
     }
+    // FalseReg == A means value is already in A
+
+    // Now move A to DstReg
+    if (DstReg == W65816::X) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TAX));
+    } else if (DstReg == W65816::Y) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TAY));
+    } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+      BuildMI(FalseMBB, DL, TII->get(W65816::STA_dp)).addReg(W65816::A).addImm(DPAddr);
+    }
+    // DstReg == A means result is already in place
   }
   // FalseMBB falls through to SinkMBB
 
@@ -2973,55 +2987,57 @@ bool W65816ExpandPseudo::expandSelect16Unsigned(Block &MBB, BlockIt MBBI,
   }
 
   // TrueMBB: copy trueVal to dst, then jump to sink
+  // Strategy: get TrueReg to A, then move to DstReg
   if (TrueReg != DstReg) {
-    if (TrueReg == W65816::A) {
-      if (DstReg == W65816::X) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TAX));
-      } else if (DstReg == W65816::Y) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TAY));
-      }
-    } else if (TrueReg == W65816::X) {
-      if (DstReg == W65816::A) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TXA));
-      } else if (DstReg == W65816::Y) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TXA));
-        BuildMI(TrueMBB, DL, TII->get(W65816::TAY));
-      }
+    // First get TrueReg value into A (if not already)
+    if (TrueReg == W65816::X) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TXA));
     } else if (TrueReg == W65816::Y) {
-      if (DstReg == W65816::A) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TYA));
-      } else if (DstReg == W65816::X) {
-        BuildMI(TrueMBB, DL, TII->get(W65816::TYA));
-        BuildMI(TrueMBB, DL, TII->get(W65816::TAX));
-      }
+      BuildMI(TrueMBB, DL, TII->get(W65816::TYA));
+    } else if (W65816::IMAG16RegClass.contains(TrueReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(TrueReg);
+      BuildMI(TrueMBB, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
     }
+    // TrueReg == A means value is already in A
+
+    // Now move A to DstReg
+    if (DstReg == W65816::X) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TAX));
+    } else if (DstReg == W65816::Y) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TAY));
+    } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+      BuildMI(TrueMBB, DL, TII->get(W65816::STA_dp)).addReg(W65816::A).addImm(DPAddr);
+    }
+    // DstReg == A means result is already in place
   }
   // Jump to SinkMBB (since FalseMBB is between TrueMBB and SinkMBB)
   BuildMI(TrueMBB, DL, TII->get(W65816::BRA)).addMBB(SinkMBB);
 
   // FalseMBB: copy falseVal to dst
+  // Strategy: get FalseReg to A, then move to DstReg
   if (FalseReg != DstReg) {
-    if (FalseReg == W65816::A) {
-      if (DstReg == W65816::X) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TAX));
-      } else if (DstReg == W65816::Y) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TAY));
-      }
-    } else if (FalseReg == W65816::X) {
-      if (DstReg == W65816::A) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TXA));
-      } else if (DstReg == W65816::Y) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TXA));
-        BuildMI(FalseMBB, DL, TII->get(W65816::TAY));
-      }
+    // First get FalseReg value into A (if not already)
+    if (FalseReg == W65816::X) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TXA));
     } else if (FalseReg == W65816::Y) {
-      if (DstReg == W65816::A) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TYA));
-      } else if (DstReg == W65816::X) {
-        BuildMI(FalseMBB, DL, TII->get(W65816::TYA));
-        BuildMI(FalseMBB, DL, TII->get(W65816::TAX));
-      }
+      BuildMI(FalseMBB, DL, TII->get(W65816::TYA));
+    } else if (W65816::IMAG16RegClass.contains(FalseReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(FalseReg);
+      BuildMI(FalseMBB, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
     }
+    // FalseReg == A means value is already in A
+
+    // Now move A to DstReg
+    if (DstReg == W65816::X) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TAX));
+    } else if (DstReg == W65816::Y) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TAY));
+    } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+      BuildMI(FalseMBB, DL, TII->get(W65816::STA_dp)).addReg(W65816::A).addImm(DPAddr);
+    }
+    // DstReg == A means result is already in place
   }
   // FalseMBB falls through to SinkMBB
 
@@ -3316,7 +3332,12 @@ bool W65816ExpandPseudo::expandSTA8_abs(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    buildMI(MBB, MBBI, W65816::LDA_dp, W65816::A).addImm(DPAddr);
   }
+  // If SrcReg == A, it's already there
 
   // SEP #$20
   BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
@@ -3348,7 +3369,12 @@ bool W65816ExpandPseudo::expandSTA8_sr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    buildMI(MBB, MBBI, W65816::LDA_dp, W65816::A).addImm(DPAddr);
   }
+  // If SrcReg == A, it's already there
 
   // SEP #$20
   BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
@@ -3442,7 +3468,12 @@ bool W65816ExpandPseudo::expandSTA8_srIndY(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    buildMI(MBB, MBBI, W65816::LDA_dp, W65816::A).addImm(DPAddr);
   }
+  // If SrcReg == A, it's already there
 
   // SEP #$20 - set M flag (8-bit accumulator mode)
   BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP))
