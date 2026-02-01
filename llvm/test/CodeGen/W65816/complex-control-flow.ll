@@ -93,7 +93,7 @@ compute:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: chained_compare:
-; CHECK: cmp
+; CHECK: cp{{x|y}}
 ; CHECK: b{{cc|cs|eq|ne}}
 define i16 @chained_compare(i16 %x) {
 entry:

@@ -10,7 +10,7 @@ target triple = "w65816-unknown-none"
 
 ; CHECK-LABEL: switch_small:
 ; Small switches typically lower to comparison chains
-; CHECK: cmp
+; CHECK: cp{{x|y}}
 ; CHECK: rts
 define i16 @switch_small(i16 %x) {
 entry:
@@ -38,7 +38,7 @@ default:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: switch_consecutive:
-; CHECK: cmp
+; CHECK: cp{{x|y}}
 ; CHECK: rts
 define i16 @switch_consecutive(i16 %x) {
 entry:
@@ -71,7 +71,7 @@ default:
 
 ; CHECK-LABEL: switch_sparse:
 ; Sparse switches become comparison chains
-; CHECK: cmp
+; CHECK: cp{{x|y}}
 ; CHECK: rts
 define i16 @switch_sparse(i16 %x) {
 entry:
@@ -103,7 +103,7 @@ default:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: switch_two:
-; CHECK: cmp
+; CHECK: cp{{x|y}}
 ; CHECK: rts
 define i16 @switch_two(i16 %x) {
 entry:
@@ -127,7 +127,7 @@ default:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: switch_fallthrough:
-; CHECK: cmp
+; CHECK: cp{{x|y}}
 ; CHECK: rts
 define i16 @switch_fallthrough(i16 %x) {
 entry:
@@ -177,7 +177,7 @@ default:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: switch_compute:
-; CHECK: cmp
+; CHECK: cp{{x|y}}
 ; CHECK: rts
 define i16 @switch_compute(i16 %x, i16 %y) {
 entry:

@@ -124,7 +124,8 @@ else:
 
 ; CHECK-LABEL: count_loop:
 ; CHECK: .L{{.*}}:
-; CHECK: dec a
+; CHECK: dex
+; CHECK: cpx #1
 ; CHECK: bne .L
 ; CHECK: rts
 define i16 @count_loop(i16 %n) {
