@@ -40,7 +40,10 @@ void W65816InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                   const DebugLoc &DL, Register DestReg,
                                   Register SrcReg, bool KillSrc,
                                   bool RenamableDest, bool RenamableSrc) const {
-  // W65816 has limited copy capabilities - mainly through accumulator
+  // W65816 register copy capabilities:
+  // - A <-> X: TAX, TXA
+  // - A <-> Y: TAY, TYA
+  // - X <-> Y: TXY, TYX (direct transfers, don't clobber A!)
 
   if (W65816::ACC16RegClass.contains(DestReg, SrcReg)) {
     // A to A - no-op
@@ -49,22 +52,28 @@ void W65816InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
 
   if (W65816::GPR16RegClass.contains(DestReg) &&
       W65816::GPR16RegClass.contains(SrcReg)) {
-    // For GPR16 copies, we need to go through the accumulator
-    if (SrcReg == W65816::X) {
-      BuildMI(MBB, MI, DL, get(W65816::TXA));
-      if (DestReg == W65816::Y) {
-        BuildMI(MBB, MI, DL, get(W65816::TAY));
-      }
-    } else if (SrcReg == W65816::Y) {
-      BuildMI(MBB, MI, DL, get(W65816::TYA));
-      if (DestReg == W65816::X) {
-        BuildMI(MBB, MI, DL, get(W65816::TAX));
-      }
-    } else if (SrcReg == W65816::A) {
+    if (SrcReg == W65816::A) {
+      // A -> X or A -> Y
       if (DestReg == W65816::X) {
         BuildMI(MBB, MI, DL, get(W65816::TAX));
       } else if (DestReg == W65816::Y) {
         BuildMI(MBB, MI, DL, get(W65816::TAY));
+      }
+    } else if (SrcReg == W65816::X) {
+      if (DestReg == W65816::A) {
+        // X -> A
+        BuildMI(MBB, MI, DL, get(W65816::TXA));
+      } else if (DestReg == W65816::Y) {
+        // X -> Y: Use direct TXY instruction (doesn't clobber A!)
+        BuildMI(MBB, MI, DL, get(W65816::TXY));
+      }
+    } else if (SrcReg == W65816::Y) {
+      if (DestReg == W65816::A) {
+        // Y -> A
+        BuildMI(MBB, MI, DL, get(W65816::TYA));
+      } else if (DestReg == W65816::X) {
+        // Y -> X: Use direct TYX instruction (doesn't clobber A!)
+        BuildMI(MBB, MI, DL, get(W65816::TYX));
       }
     }
     return;

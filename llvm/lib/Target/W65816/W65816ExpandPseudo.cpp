@@ -119,6 +119,7 @@ private:
   bool expandSTAindirectIdx(Block &MBB, BlockIt MBBI);
   bool expandRELOAD_GPR16(Block &MBB, BlockIt MBBI);
   bool expandSPILL_GPR16(Block &MBB, BlockIt MBBI);
+  bool expandLEA_fi(Block &MBB, BlockIt MBBI);
   bool expandMOV16ri(Block &MBB, BlockIt MBBI);
   bool expandMOV16ri_acc8(Block &MBB, BlockIt MBBI);
   bool expandINC16(Block &MBB, BlockIt MBBI);
@@ -249,6 +250,8 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandRELOAD_GPR16(MBB, MBBI);
   case W65816::SPILL_GPR16:
     return expandSPILL_GPR16(MBB, MBBI);
+  case W65816::LEA_fi:
+    return expandLEA_fi(MBB, MBBI);
   case W65816::MOV16ri:
     return expandMOV16ri(MBB, MBBI);
   case W65816::MOV16ri_acc8:
@@ -1866,17 +1869,27 @@ bool W65816ExpandPseudo::expandSTAindirect(Block &MBB, BlockIt MBBI) {
   //
   // Strategy:
   // 1. Save val to hardware stack (we need A for ptr storage)
-  // 2. Get ptr to A and store to stack_slot
+  // 2. Get ptr to A and store to stack_slot (adjusted for push)
   // 3. Load idx to Y
-  // 4. Restore val to A
-  // 5. STA (stack_slot,S),Y
+  // 4. Restore val to A (SP restored after this)
+  // 5. STA (stack_slot,S),Y (original offset is correct here)
 
   Register ValReg = MI.getOperand(0).getReg();
   MachineOperand &StackSlotOp = MI.getOperand(1);
   Register PtrReg = MI.getOperand(2).getReg();
   int64_t Idx = MI.getOperand(3).getImm();
 
+  // Get the stack slot offset (resolved to immediate by frame lowering)
+  int64_t StackSlotOffset = 0;
+  if (StackSlotOp.isFI()) {
+    // Frame index not resolved - shouldn't happen after PEI
+    llvm_unreachable("Frame index should be resolved by now");
+  } else {
+    StackSlotOffset = StackSlotOp.getImm();
+  }
+
   // Step 1: Save val to hardware stack
+  // After this, SP decreases by 2, so stack slot is at offset+2
   if (ValReg == W65816::A) {
     buildMI(MBB, MBBI, W65816::PHA);
   } else if (ValReg == W65816::X) {
@@ -1886,6 +1899,7 @@ bool W65816ExpandPseudo::expandSTAindirect(Block &MBB, BlockIt MBBI) {
   }
 
   // Step 2: Get ptr to A and store to stack_slot
+  // IMPORTANT: Adjust offset by +2 because we pushed val in step 1
   if (PtrReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (PtrReg == W65816::Y) {
@@ -1893,29 +1907,22 @@ bool W65816ExpandPseudo::expandSTAindirect(Block &MBB, BlockIt MBBI) {
   }
   // If PtrReg == A, it's already there (but we saved val first)
 
-  auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
-      .addReg(W65816::A);
-  if (StackSlotOp.isFI()) {
-    StoreInst.addFrameIndex(StackSlotOp.getIndex());
-  } else {
-    StoreInst.add(StackSlotOp);
-  }
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+      .addReg(W65816::A)
+      .addImm(StackSlotOffset + 2);  // +2 to account for pushed val
 
   // Step 3: Load idx to Y
   BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
       .addImm(Idx);
 
   // Step 4: Restore val to A from hardware stack
+  // After this, SP is restored, so stack slot is back at original offset
   buildMI(MBB, MBBI, W65816::PLA);
 
-  // Step 5: Store through the pointer
-  auto IndStoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_srIndY))
-      .addReg(W65816::A);
-  if (StackSlotOp.isFI()) {
-    IndStoreInst.addFrameIndex(StackSlotOp.getIndex());
-  } else {
-    IndStoreInst.add(StackSlotOp);
-  }
+  // Step 5: Store through the pointer (original offset is correct now)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_srIndY))
+      .addReg(W65816::A)
+      .addImm(StackSlotOffset);
 
   MI.eraseFromParent();
   return true;
@@ -1931,19 +1938,28 @@ bool W65816ExpandPseudo::expandSTAindirectIdx(Block &MBB, BlockIt MBBI) {
   //   - idx is the byte offset register (loaded to Y)
   //
   // Strategy:
-  // 1. Save val to hardware stack
+  // 1. Save val to hardware stack (SP -= 2, offset += 2)
   // 2. Handle ptr/idx carefully based on register assignments
-  // 3. Store ptr to stack_slot
+  // 3. Store ptr to stack_slot (with adjusted offset)
   // 4. Get idx to Y
-  // 5. Restore val to A
-  // 6. STA (stack_slot,S),Y
+  // 5. Restore val to A (SP += 2, offset back to original)
+  // 6. STA (stack_slot,S),Y (original offset)
 
   Register ValReg = MI.getOperand(0).getReg();
   MachineOperand &StackSlotOp = MI.getOperand(1);
   Register PtrReg = MI.getOperand(2).getReg();
   Register IdxReg = MI.getOperand(3).getReg();
 
+  // Get the stack slot offset (resolved to immediate by frame lowering)
+  int64_t StackSlotOffset = 0;
+  if (StackSlotOp.isFI()) {
+    llvm_unreachable("Frame index should be resolved by now");
+  } else {
+    StackSlotOffset = StackSlotOp.getImm();
+  }
+
   // Step 1: Save val to hardware stack
+  // After this, SP -= 2, so all stack slot references need +2
   if (ValReg == W65816::A) {
     buildMI(MBB, MBBI, W65816::PHA);
   } else if (ValReg == W65816::X) {
@@ -1952,28 +1968,25 @@ bool W65816ExpandPseudo::expandSTAindirectIdx(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::PHY);
   }
 
+  // Current offset adjustment: +2 (for pushed val)
+  int64_t CurrentAdjustment = 2;
+
   // Step 2: Handle ptr and idx based on their register assignments
   // The tricky part is getting both ptr to the stack slot and idx to Y
   // without clobbering one or the other.
 
   if (PtrReg == W65816::A) {
     // ptr is in A - store it to stack slot first before we clobber A
-    auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
-        .addReg(W65816::A);
-    if (StackSlotOp.isFI()) {
-      StoreInst.addFrameIndex(StackSlotOp.getIndex());
-    } else {
-      StoreInst.add(StackSlotOp);
-    }
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A)
+        .addImm(StackSlotOffset + CurrentAdjustment);
 
     // Now get idx to Y
     if (IdxReg == W65816::X) {
       buildMI(MBB, MBBI, W65816::TXA);
       buildMI(MBB, MBBI, W65816::TAY);
     } else if (IdxReg == W65816::A) {
-      // A was ptr but we already stored it, now A might have val or be undefined
-      // Actually, A still has ptr value. But we need idx in Y.
-      // If IdxReg == A, that's the same register as PtrReg, which is a problem...
+      // A was ptr but we already stored it, A still has ptr value
       // This means idx == ptr, which is unusual but let's handle it
       buildMI(MBB, MBBI, W65816::TAY);
     }
@@ -1992,30 +2005,23 @@ bool W65816ExpandPseudo::expandSTAindirectIdx(Block &MBB, BlockIt MBBI) {
 
     // Now get ptr (X) to A and store to stack slot
     buildMI(MBB, MBBI, W65816::TXA);
-    auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
-        .addReg(W65816::A);
-    if (StackSlotOp.isFI()) {
-      StoreInst.addFrameIndex(StackSlotOp.getIndex());
-    } else {
-      StoreInst.add(StackSlotOp);
-    }
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A)
+        .addImm(StackSlotOffset + CurrentAdjustment);
   } else if (PtrReg == W65816::Y) {
     // ptr is in Y - need to save it first since we need Y for idx
     if (IdxReg == W65816::Y) {
       // idx is also in Y, so idx == ptr - store ptr and we're done with idx
       buildMI(MBB, MBBI, W65816::TYA);
-      auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
-          .addReg(W65816::A);
-      if (StackSlotOp.isFI()) {
-        StoreInst.addFrameIndex(StackSlotOp.getIndex());
-      } else {
-        StoreInst.add(StackSlotOp);
-      }
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+          .addReg(W65816::A)
+          .addImm(StackSlotOffset + CurrentAdjustment);
       // Y still has the value (idx == ptr)
     } else {
       // ptr is in Y, idx is in A or X
       // Save ptr (Y) to hardware stack temporarily
       buildMI(MBB, MBBI, W65816::PHY);
+      CurrentAdjustment += 2;  // Now +4 total
 
       // Get idx to Y
       if (IdxReg == W65816::A) {
@@ -2027,27 +2033,21 @@ bool W65816ExpandPseudo::expandSTAindirectIdx(Block &MBB, BlockIt MBBI) {
 
       // Pull ptr from hardware stack to A and store to stack slot
       buildMI(MBB, MBBI, W65816::PLA);
-      auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
-          .addReg(W65816::A);
-      if (StackSlotOp.isFI()) {
-        StoreInst.addFrameIndex(StackSlotOp.getIndex());
-      } else {
-        StoreInst.add(StackSlotOp);
-      }
+      CurrentAdjustment -= 2;  // Back to +2
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+          .addReg(W65816::A)
+          .addImm(StackSlotOffset + CurrentAdjustment);
     }
   }
 
   // Step 3: Restore val to A from hardware stack
+  // After this, SP is restored, so offset goes back to original
   buildMI(MBB, MBBI, W65816::PLA);
 
-  // Step 4: Store through the pointer
-  auto IndStoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_srIndY))
-      .addReg(W65816::A);
-  if (StackSlotOp.isFI()) {
-    IndStoreInst.addFrameIndex(StackSlotOp.getIndex());
-  } else {
-    IndStoreInst.add(StackSlotOp);
-  }
+  // Step 4: Store through the pointer (original offset is correct now)
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_srIndY))
+      .addReg(W65816::A)
+      .addImm(StackSlotOffset);
 
   MI.eraseFromParent();
   return true;
@@ -2134,28 +2134,153 @@ bool W65816ExpandPseudo::expandSPILL_GPR16(Block &MBB, BlockIt MBBI) {
 
   // SPILL_GPR16 $src, $fi
   // Store from any GPR16 register to stack frame slot
-  // Expanded to: (TXA/TYA if src is X/Y +) STA_sr
-  // Note: We don't save/restore A here - if A had a live value,
-  // the register allocator should have spilled it first.
+  // For A: just STA_sr
+  // For X/Y: save A to DP scratch if live, then TXA/TYA, STA_sr, restore A
+  //
+  // IMPORTANT: We must save A to DP scratch (not stack) because:
+  // 1. PHA changes SP, affecting stack-relative addressing
+  // 2. We need stack-relative addressing for the spill itself
 
   Register SrcReg = MI.getOperand(0).getReg();
   MachineOperand &FIOp = MI.getOperand(1);
 
-  // Transfer to A if not already there
-  if (SrcReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
-  } else if (SrcReg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
-  }
-  // If SrcReg == A, value is already there
+  // Scratch DP location for saving A (same as RELOAD_GPR16 uses)
+  static const unsigned SPILL_SCRATCH_DP = 0xFC;
 
-  // Store from A to stack slot
-  auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
-      .addReg(W65816::A);
-  if (FIOp.isFI()) {
-    StoreInst.addFrameIndex(FIOp.getIndex());
+  if (SrcReg == W65816::A) {
+    // Direct store from A - no save needed
+    auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A);
+    if (FIOp.isFI()) {
+      StoreInst.addFrameIndex(FIOp.getIndex());
+    } else {
+      StoreInst.add(FIOp);
+    }
   } else {
-    StoreInst.add(FIOp);
+    // Spilling X or Y - need to transfer through A
+    // Check if A is live and needs protection
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+
+    if (ALive) {
+      // Save A to scratch DP location (doesn't affect SP)
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SPILL_SCRATCH_DP);
+    }
+
+    // Transfer to A
+    if (SrcReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+    } else { // Y
+      buildMI(MBB, MBBI, W65816::TYA);
+    }
+
+    // Store from A to stack slot
+    auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A);
+    if (FIOp.isFI()) {
+      StoreInst.addFrameIndex(FIOp.getIndex());
+    } else {
+      StoreInst.add(FIOp);
+    }
+
+    if (ALive) {
+      // Restore A from scratch DP location
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(SPILL_SCRATCH_DP);
+    }
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLEA_fi(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LEA_fi $dst, $fi
+  // Load effective address of a stack frame slot into any GPR16 register.
+  // This is used when a pointer to a stack allocation needs to be passed
+  // to a function call.
+  //
+  // The actual address is computed at frame lowering time. Here we just
+  // expand to:
+  //   TSC           ; Transfer Stack pointer to C (Accumulator)
+  //   CLC
+  //   ADC #offset   ; Add the frame index offset (filled in by frame lowering)
+  //   (TAX/TAY if dest is X or Y)
+  //
+  // Note: On W65816, TSC gives the actual stack pointer value.
+  // Stack-relative addressing uses (S + offset) directly.
+
+  Register DstReg = MI.getOperand(0).getReg();
+  MachineOperand &FIOp = MI.getOperand(1);
+
+  // Check if A is live and needs protection (only if dest is X or Y)
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+    if (ALive) {
+      // Save A to scratch DP location
+      static const unsigned LEA_SCRATCH_DP = 0xFA;
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(LEA_SCRATCH_DP);
+    }
+  }
+
+  // TSC: Transfer Stack pointer to Accumulator
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::TSC), W65816::A);
+
+  // CLC: Clear carry for addition
+  buildMI(MBB, MBBI, W65816::CLC);
+
+  // ADC #offset: Add the frame index offset to get the actual address
+  // By the time this expansion runs, frame lowering has already replaced
+  // the frame index with the actual stack offset (an immediate).
+  auto ADCInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_imm16), W65816::A);
+  if (FIOp.isFI()) {
+    // Frame index not yet resolved - this shouldn't happen if pass ordering is correct
+    ADCInst.addFrameIndex(FIOp.getIndex());
+  } else if (FIOp.isImm()) {
+    // Frame index was resolved to an immediate offset
+    ADCInst.addImm(FIOp.getImm());
+  } else {
+    // Other operand type - try to add as-is
+    ADCInst.add(FIOp);
+  }
+
+  // Transfer to destination register if not A
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  }
+
+  // Restore A if it was live and we needed to use it
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+    if (ALive) {
+      static const unsigned LEA_SCRATCH_DP = 0xFA;
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(LEA_SCRATCH_DP);
+    }
   }
 
   MI.eraseFromParent();

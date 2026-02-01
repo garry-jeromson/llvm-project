@@ -132,9 +132,18 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
   // setup. The MOV16ri pseudo is later expanded to LDA/LDX/LDY_imm16.
 
   case ISD::FrameIndex: {
+    // When FrameIndex is used as a value (e.g., passed to a call as a pointer),
+    // we need to materialize the stack address into a register.
+    // Use LEA (Load Effective Address) pseudo to compute the address.
     int FI = cast<FrameIndexSDNode>(N)->getIndex();
     SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
-    ReplaceNode(N, TFI.getNode());
+    // Create an ADDri to compute SP + offset. This will be lowered to proper
+    // stack address computation after frame lowering.
+    // For now, use a MOV16ri with the frame index which will be handled
+    // during frame lowering to become the actual address computation.
+    MachineSDNode *LEA = CurDAG->getMachineNode(
+        W65816::LEA_fi, DL, MVT::i16, TFI);
+    ReplaceNode(N, LEA);
     return;
   }
 
@@ -1165,8 +1174,13 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       }
     }
 
-    // Only handle if both operands are 8-bit extending loads
-    if (LHSLoad && RHSLoad) {
+    // Only handle if both operands are 8-bit extending loads with single use
+    // If loads have multiple uses, we can't bypass them - fall through to default
+    // Also check that the load chain outputs have no users - if they do, bypassing
+    // the loads would leave dangling chain references causing scheduling issues.
+    if (LHSLoad && RHSLoad &&
+        LHS.hasOneUse() && RHS.hasOneUse() &&
+        !LHSLoad->hasAnyUseOfValue(1) && !RHSLoad->hasAnyUseOfValue(1)) {
       SDValue LHSAddr = LHSLoad->getBasePtr();
       SDValue RHSAddr = RHSLoad->getBasePtr();
 

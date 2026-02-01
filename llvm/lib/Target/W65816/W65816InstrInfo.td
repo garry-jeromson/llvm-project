@@ -370,6 +370,16 @@ let mayStore = 1, hasSideEffects = 0 in {
                            "# SPILL_GPR16 $src, $fi", []>;
 }
 
+// LEA_fi - Load Effective Address of frame index into a GPR16 register
+// Used when a stack address needs to be passed as a value (e.g., to a call).
+// Expanded to: TSX/TXA + CLC + ADC #offset (computes SP + offset)
+// This allows taking the address of a stack allocation.
+let Defs = [P], hasSideEffects = 0 in {
+  def LEA_fi : Pseudo<(outs GPR16:$dst), (ins i16imm:$fi),
+                      "# LEA_fi $dst, $fi",
+                      [(set GPR16:$dst, (frameindex:$fi))]>;
+}
+
 // MOV16ri - Load immediate into any GPR16 register
 // Expanded to: LDA #imm, LDX #imm, or LDY #imm based on allocated register
 // This allows register allocation flexibility for phi nodes in loops.

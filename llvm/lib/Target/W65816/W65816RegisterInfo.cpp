@@ -133,6 +133,11 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
   bool IsFixed = MFI.isFixedObjectIndex(FrameIndex);
   uint64_t MaxCallFrameSize = MFI.getMaxCallFrameSize();
 
+  // The prologue uses PHA to save A before arithmetic stack adjustment when
+  // StackSize > 8. This adds 2 extra bytes to the actual frame size that
+  // aren't reflected in StackSize. Account for this here.
+  uint64_t ProloguePHASize = (StackSize > 8) ? 2 : 0;
+
   // Stack layout (addresses grow down, SP points to last used byte):
   //
   // For OUTGOING args (in caller, created by LowerCall):
@@ -159,13 +164,13 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
       Offset += 1;
     } else {
       // Incoming argument - above return address
-      Offset += StackSize + SPAdj;
+      Offset += StackSize + ProloguePHASize + SPAdj;
       Offset += 2; // return address size
       Offset += 1; // SP points to last used byte
     }
   } else {
     // Locals (negative offset from frame base)
-    Offset += StackSize + SPAdj;
+    Offset += StackSize + ProloguePHASize + SPAdj;
     Offset += 1; // SP points to last used byte
   }
 
