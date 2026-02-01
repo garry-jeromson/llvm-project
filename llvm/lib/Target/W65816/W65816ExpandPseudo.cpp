@@ -145,6 +145,20 @@ private:
   bool expandSTA8indexedX(Block &MBB, BlockIt MBBI);
   bool expandLDAindexedDPY(Block &MBB, BlockIt MBBI);
   bool expandSTAindexedDPY(Block &MBB, BlockIt MBBI);
+  // Imaginary register expansion functions
+  bool expandCOPY_TO_IMAG(Block &MBB, BlockIt MBBI);
+  bool expandCOPY_FROM_IMAG(Block &MBB, BlockIt MBBI);
+  bool expandCOPY_IMAG_TO_IMAG(Block &MBB, BlockIt MBBI);
+  bool expandMOV_IMAG_ri(Block &MBB, BlockIt MBBI);
+  bool expandADD_IMAG(Block &MBB, BlockIt MBBI);
+  bool expandSUB_IMAG(Block &MBB, BlockIt MBBI);
+  bool expandCMP_IMAG(Block &MBB, BlockIt MBBI);
+  bool expandAND_IMAG(Block &MBB, BlockIt MBBI);
+  bool expandORA_IMAG(Block &MBB, BlockIt MBBI);
+  bool expandEOR_IMAG(Block &MBB, BlockIt MBBI);
+
+  // Helper to get the Direct Page address for an imaginary register
+  unsigned getImaginaryRegDPAddr(Register Reg) const;
 };
 
 char W65816ExpandPseudo::ID = 0;
@@ -310,6 +324,27 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandLDAindexedDPY(MBB, MBBI);
   case W65816::STAindexedDPY:
     return expandSTAindexedDPY(MBB, MBBI);
+  // Imaginary register operations
+  case W65816::COPY_TO_IMAG:
+    return expandCOPY_TO_IMAG(MBB, MBBI);
+  case W65816::COPY_FROM_IMAG:
+    return expandCOPY_FROM_IMAG(MBB, MBBI);
+  case W65816::COPY_IMAG_TO_IMAG:
+    return expandCOPY_IMAG_TO_IMAG(MBB, MBBI);
+  case W65816::MOV_IMAG_ri:
+    return expandMOV_IMAG_ri(MBB, MBBI);
+  case W65816::ADD_IMAG:
+    return expandADD_IMAG(MBB, MBBI);
+  case W65816::SUB_IMAG:
+    return expandSUB_IMAG(MBB, MBBI);
+  case W65816::CMP_IMAG:
+    return expandCMP_IMAG(MBB, MBBI);
+  case W65816::AND_IMAG:
+    return expandAND_IMAG(MBB, MBBI);
+  case W65816::ORA_IMAG:
+    return expandORA_IMAG(MBB, MBBI);
+  case W65816::EOR_IMAG:
+    return expandEOR_IMAG(MBB, MBBI);
   default:
     return false;
   }
@@ -416,6 +451,11 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (Src1Reg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(Src1Reg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
   }
   // If Src1Reg == A, it's already there
 
@@ -446,6 +486,11 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
         .addImm(SCRATCH_DP_ADDR);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
+  } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+    // Add from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_dp), W65816::A)
+        .addImm(DPAddr);
   }
 
   // Result is now in A
@@ -454,6 +499,12 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Store result to imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
   // If DstReg == A, result is already there
 
@@ -477,7 +528,13 @@ bool W65816ExpandPseudo::expandADD16ri(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
   }
+  // If SrcReg == A, it's already there
 
   // Clear carry before addition
   buildMI(MBB, MBBI, W65816::CLC);
@@ -491,7 +548,14 @@ bool W65816ExpandPseudo::expandADD16ri(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Store result to imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
+  // If DstReg == A, result is already there
 
   MI.eraseFromParent();
   return true;
@@ -522,6 +586,10 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
       buildMI(MBB, MBBI, W65816::TXA);
     } else if (Src1Reg == W65816::Y) {
       buildMI(MBB, MBBI, W65816::TYA);
+    } else if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(Src1Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(DPAddr);
     }
 
     // Set carry and subtract from scratch
@@ -535,6 +603,10 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
       buildMI(MBB, MBBI, W65816::TXA);
     } else if (Src1Reg == W65816::Y) {
       buildMI(MBB, MBBI, W65816::TYA);
+    } else if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(Src1Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(DPAddr);
     }
 
     // Set carry before subtraction (borrow = !carry)
@@ -560,6 +632,11 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
           .addImm(SCRATCH_DP_ADDR);
       BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
           .addImm(SCRATCH_DP_ADDR);
+    } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+      // Subtract from imaginary register (DP location)
+      unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+          .addImm(DPAddr);
     }
   }
 
@@ -568,6 +645,11 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
 
   MI.eraseFromParent();
@@ -590,7 +672,13 @@ bool W65816ExpandPseudo::expandSUB16ri(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
   }
+  // If SrcReg == A, it's already there
 
   // Set carry before subtraction (borrow = !carry)
   buildMI(MBB, MBBI, W65816::SEC);
@@ -604,7 +692,14 @@ bool W65816ExpandPseudo::expandSUB16ri(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Store result to imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
+  // If DstReg == A, result is already there
 
   MI.eraseFromParent();
   return true;
@@ -638,6 +733,10 @@ bool W65816ExpandPseudo::expandCMP16rr(Block &MBB, BlockIt MBBI) {
       buildMI(MBB, MBBI, W65816::TXA);
     } else if (Src1Reg == W65816::Y) {
       buildMI(MBB, MBBI, W65816::TYA);
+    } else if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(Src1Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(DPAddr);
     }
 
     // Set carry and compare: A (src1) - DP (src2)
@@ -651,7 +750,12 @@ bool W65816ExpandPseudo::expandCMP16rr(Block &MBB, BlockIt MBBI) {
       buildMI(MBB, MBBI, W65816::TXA);
     } else if (Src1Reg == W65816::Y) {
       buildMI(MBB, MBBI, W65816::TYA);
+    } else if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(Src1Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(DPAddr);
     }
+    // If Src1Reg == A, it's already there
 
     // Set carry and subtract src2 using DP scratch
     buildMI(MBB, MBBI, W65816::SEC);
@@ -676,6 +780,11 @@ bool W65816ExpandPseudo::expandCMP16rr(Block &MBB, BlockIt MBBI) {
           .addImm(SCRATCH_DP_ADDR);
       BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
           .addImm(SCRATCH_DP_ADDR);
+    } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+      // Subtract from imaginary register (DP location)
+      unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+          .addImm(DPAddr);
     }
   }
 
@@ -712,6 +821,14 @@ bool W65816ExpandPseudo::expandCMP16ri(Block &MBB, BlockIt MBBI) {
   } else if (SrcReg == W65816::Y) {
     // Use CPY_imm16 for Y register (doesn't clobber A)
     BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_imm16))
+        .addImm(Imm);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Load imaginary register to A, then compare with immediate
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
+        .addReg(W65816::A)
         .addImm(Imm);
   } else {
     llvm_unreachable("CMP16ri with non-physical register");
@@ -1051,7 +1168,13 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (Src1Reg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(Src1Reg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
   }
+  // If Src1Reg == A, it's already there
 
   // AND src2 using Direct Page scratch location
   if (Src2Reg == W65816::X) {
@@ -1073,6 +1196,11 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
         .addImm(SCRATCH_DP_ADDR);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
+  } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+    // AND from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_dp), W65816::A)
+        .addImm(DPAddr);
   }
 
   // Move result to destination if needed
@@ -1080,7 +1208,14 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Store result to imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
+  // If DstReg == A, result is already there
 
   MI.eraseFromParent();
   return true;
@@ -1103,7 +1238,13 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (Src1Reg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(Src1Reg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
   }
+  // If Src1Reg == A, it's already there
 
   // ORA src2 using Direct Page scratch location
   if (Src2Reg == W65816::X) {
@@ -1125,6 +1266,11 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
         .addImm(SCRATCH_DP_ADDR);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
+  } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+    // ORA from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_dp), W65816::A)
+        .addImm(DPAddr);
   }
 
   // Move result to destination if needed
@@ -1132,7 +1278,14 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Store result to imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
+  // If DstReg == A, result is already there
 
   MI.eraseFromParent();
   return true;
@@ -1155,7 +1308,13 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (Src1Reg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+    // Load from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(Src1Reg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
   }
+  // If Src1Reg == A, it's already there
 
   // EOR src2 using Direct Page scratch location
   if (Src2Reg == W65816::X) {
@@ -1177,6 +1336,11 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
         .addImm(SCRATCH_DP_ADDR);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
+  } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+    // EOR from imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_dp), W65816::A)
+        .addImm(DPAddr);
   }
 
   // Move result to destination if needed
@@ -1184,7 +1348,14 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Store result to imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
+  // If DstReg == A, result is already there
 
   MI.eraseFromParent();
   return true;
@@ -1748,7 +1919,8 @@ bool W65816ExpandPseudo::expandLDAindirectIdx(Block &MBB, BlockIt MBBI) {
   //   - idx is the byte offset (loaded to Y)
   //
   // Goal: Get ptr into stack_slot, idx into Y, then use LDA (offset,S),Y
-  // Challenge: Handle all 9 register combinations without clobbering
+  // Challenge: Handle all register combinations without clobbering,
+  //            including imaginary registers
 
   Register DstReg = MI.getOperand(0).getReg();
   MachineOperand &StackSlotOp = MI.getOperand(1);
@@ -1764,10 +1936,73 @@ bool W65816ExpandPseudo::expandLDAindirectIdx(Block &MBB, BlockIt MBBI) {
     }
   };
 
-  // Handle all 9 register combinations
-  // Key insight: order operations to avoid clobbering
+  // Check if registers are imaginary (backed by Direct Page)
+  bool PtrIsImag = W65816::IMAG16RegClass.contains(PtrReg);
+  bool IdxIsImag = W65816::IMAG16RegClass.contains(IdxReg);
 
-  if (PtrReg == W65816::Y) {
+  // Handle imaginary registers by loading them to physical registers first
+  if (PtrIsImag && IdxIsImag) {
+    // Both ptr and idx are imaginary
+    // Load idx to Y first (via A), then load ptr to A and store to stack slot
+    unsigned IdxDPAddr = getImaginaryRegDPAddr(IdxReg);
+    unsigned PtrDPAddr = getImaginaryRegDPAddr(PtrReg);
+
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(IdxDPAddr);
+    buildMI(MBB, MBBI, W65816::TAY);
+
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(PtrDPAddr);
+    auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A);
+    addStackSlot(StoreInst);
+  } else if (PtrIsImag) {
+    // Ptr is imaginary, idx is physical
+    unsigned PtrDPAddr = getImaginaryRegDPAddr(PtrReg);
+
+    // Get idx to Y first (may need A as scratch)
+    if (IdxReg == W65816::Y) {
+      // idx already in Y
+    } else if (IdxReg == W65816::A) {
+      buildMI(MBB, MBBI, W65816::TAY);
+    } else { // IdxReg == X
+      buildMI(MBB, MBBI, W65816::TXA);
+      buildMI(MBB, MBBI, W65816::TAY);
+    }
+
+    // Load ptr from DP and store to stack slot
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(PtrDPAddr);
+    auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A);
+    addStackSlot(StoreInst);
+  } else if (IdxIsImag) {
+    // Idx is imaginary, ptr is physical
+    unsigned IdxDPAddr = getImaginaryRegDPAddr(IdxReg);
+
+    // Handle ptr first (before we clobber A loading idx)
+    if (PtrReg == W65816::A) {
+      // Store ptr to stack slot first
+      auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+          .addReg(W65816::A);
+      addStackSlot(StoreInst);
+    } else if (PtrReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+      auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+          .addReg(W65816::A);
+      addStackSlot(StoreInst);
+    } else { // PtrReg == Y
+      buildMI(MBB, MBBI, W65816::TYA);
+      auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+          .addReg(W65816::A);
+      addStackSlot(StoreInst);
+    }
+
+    // Load idx from DP to Y
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(IdxDPAddr);
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (PtrReg == W65816::Y) {
     // Special case: ptr is in Y
     // We need to save ptr before we can use Y for idx
     if (IdxReg == W65816::Y) {
@@ -1944,6 +2179,9 @@ bool W65816ExpandPseudo::expandSTAindirectIdx(Block &MBB, BlockIt MBBI) {
   // 4. Get idx to Y
   // 5. Restore val to A (SP += 2, offset back to original)
   // 6. STA (stack_slot,S),Y (original offset)
+  //
+  // NOTE: All registers (val, ptr, idx) can be physical (A, X, Y) or
+  //       imaginary (RS0-RS15). Handle all combinations.
 
   Register ValReg = MI.getOperand(0).getReg();
   MachineOperand &StackSlotOp = MI.getOperand(1);
@@ -1958,9 +2196,20 @@ bool W65816ExpandPseudo::expandSTAindirectIdx(Block &MBB, BlockIt MBBI) {
     StackSlotOffset = StackSlotOp.getImm();
   }
 
+  // Check if registers are imaginary (backed by Direct Page)
+  bool ValIsImag = W65816::IMAG16RegClass.contains(ValReg);
+  bool PtrIsImag = W65816::IMAG16RegClass.contains(PtrReg);
+  bool IdxIsImag = W65816::IMAG16RegClass.contains(IdxReg);
+
   // Step 1: Save val to hardware stack
   // After this, SP -= 2, so all stack slot references need +2
-  if (ValReg == W65816::A) {
+  if (ValIsImag) {
+    // Load val from DP to A, then push A
+    unsigned ValDPAddr = getImaginaryRegDPAddr(ValReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(ValDPAddr);
+    buildMI(MBB, MBBI, W65816::PHA);
+  } else if (ValReg == W65816::A) {
     buildMI(MBB, MBBI, W65816::PHA);
   } else if (ValReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::PHX);
@@ -1975,7 +2224,68 @@ bool W65816ExpandPseudo::expandSTAindirectIdx(Block &MBB, BlockIt MBBI) {
   // The tricky part is getting both ptr to the stack slot and idx to Y
   // without clobbering one or the other.
 
-  if (PtrReg == W65816::A) {
+  if (PtrIsImag && IdxIsImag) {
+    // Both ptr and idx are imaginary
+    // Load idx to Y first (via A), then load ptr to A and store to stack slot
+    unsigned IdxDPAddr = getImaginaryRegDPAddr(IdxReg);
+    unsigned PtrDPAddr = getImaginaryRegDPAddr(PtrReg);
+
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(IdxDPAddr);
+    buildMI(MBB, MBBI, W65816::TAY);
+
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(PtrDPAddr);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A)
+        .addImm(StackSlotOffset + CurrentAdjustment);
+  } else if (PtrIsImag) {
+    // Ptr is imaginary, idx is physical
+    unsigned PtrDPAddr = getImaginaryRegDPAddr(PtrReg);
+
+    // Get idx to Y first (may need A as scratch)
+    if (IdxReg == W65816::Y) {
+      // idx already in Y
+    } else if (IdxReg == W65816::A) {
+      buildMI(MBB, MBBI, W65816::TAY);
+    } else if (IdxReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+      buildMI(MBB, MBBI, W65816::TAY);
+    }
+
+    // Load ptr from DP and store to stack slot
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(PtrDPAddr);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A)
+        .addImm(StackSlotOffset + CurrentAdjustment);
+  } else if (IdxIsImag) {
+    // Idx is imaginary, ptr is physical
+    unsigned IdxDPAddr = getImaginaryRegDPAddr(IdxReg);
+
+    // Handle ptr first (before we clobber A loading idx)
+    if (PtrReg == W65816::A) {
+      // Store ptr to stack slot first
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+          .addReg(W65816::A)
+          .addImm(StackSlotOffset + CurrentAdjustment);
+    } else if (PtrReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+          .addReg(W65816::A)
+          .addImm(StackSlotOffset + CurrentAdjustment);
+    } else if (PtrReg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TYA);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+          .addReg(W65816::A)
+          .addImm(StackSlotOffset + CurrentAdjustment);
+    }
+
+    // Load idx from DP to Y
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(IdxDPAddr);
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (PtrReg == W65816::A) {
     // ptr is in A - store it to stack slot first before we clobber A
     BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
         .addReg(W65816::A)
@@ -2266,10 +2576,16 @@ bool W65816ExpandPseudo::expandLEA_fi(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Store result to imaginary register (DP location)
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
 
   // Restore A if it was live and we needed to use it
-  if (DstReg != W65816::A) {
+  if (DstReg != W65816::A && !W65816::IMAG16RegClass.contains(DstReg)) {
     LivePhysRegs LiveRegs(*TRI);
     LiveRegs.addLiveOuts(MBB);
     for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
@@ -2292,8 +2608,8 @@ bool W65816ExpandPseudo::expandMOV16ri(Block &MBB, BlockIt MBBI) {
   DebugLoc DL = MI.getDebugLoc();
 
   // MOV16ri $dst, $imm
-  // Load immediate into any GPR16 register
-  // Expanded to: LDA #imm, LDX #imm, or LDY #imm based on allocated register
+  // Load immediate into any GPR16 register (including imaginary)
+  // Expanded to: LDA #imm, LDX #imm, LDY #imm, or LDA #imm + STA $dp
 
   Register DstReg = MI.getOperand(0).getReg();
   int64_t Imm = MI.getOperand(1).getImm();
@@ -2307,8 +2623,16 @@ bool W65816ExpandPseudo::expandMOV16ri(Block &MBB, BlockIt MBBI) {
   } else if (DstReg == W65816::Y) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y)
         .addImm(Imm);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Imaginary register: LDA #imm + STA $dp
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A)
+        .addImm(Imm);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   } else {
-    llvm_unreachable("MOV16ri with non-physical register");
+    llvm_unreachable("MOV16ri with invalid register");
   }
 
   MI.eraseFromParent();
@@ -3801,6 +4125,255 @@ bool W65816ExpandPseudo::expandSTAindexedDPY(Block &MBB, BlockIt MBBI) {
   auto StoreInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dpIndY))
       .addReg(W65816::A);
   StoreInst.add(DPAddrOp);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+//===----------------------------------------------------------------------===//
+// Imaginary Register Expansion Functions
+//===----------------------------------------------------------------------===//
+
+// Get the Direct Page address for an imaginary register.
+// RS0 = $10, RS1 = $12, ..., RS15 = $2E (each uses 2 bytes)
+unsigned W65816ExpandPseudo::getImaginaryRegDPAddr(Register Reg) const {
+  switch (Reg) {
+  case W65816::RS0:  return 0x10;
+  case W65816::RS1:  return 0x12;
+  case W65816::RS2:  return 0x14;
+  case W65816::RS3:  return 0x16;
+  case W65816::RS4:  return 0x18;
+  case W65816::RS5:  return 0x1A;
+  case W65816::RS6:  return 0x1C;
+  case W65816::RS7:  return 0x1E;
+  case W65816::RS8:  return 0x20;
+  case W65816::RS9:  return 0x22;
+  case W65816::RS10: return 0x24;
+  case W65816::RS11: return 0x26;
+  case W65816::RS12: return 0x28;
+  case W65816::RS13: return 0x2A;
+  case W65816::RS14: return 0x2C;
+  case W65816::RS15: return 0x2E;
+  default:
+    llvm_unreachable("Invalid imaginary register");
+  }
+}
+
+bool W65816ExpandPseudo::expandCOPY_TO_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // COPY_TO_IMAG $dst (imag), $src (phys)
+  // Copy from physical register to imaginary register (DP location)
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+  unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+
+  if (SrcReg == W65816::A) {
+    // Direct store: STA $dp
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  } else if (SrcReg == W65816::X) {
+    // STX $dp
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+        .addReg(W65816::X)
+        .addImm(DPAddr);
+  } else if (SrcReg == W65816::Y) {
+    // STY $dp
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+        .addReg(W65816::Y)
+        .addImm(DPAddr);
+  } else {
+    // Source is another imaginary register - load then store
+    unsigned SrcDPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(SrcDPAddr);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandCOPY_FROM_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // COPY_FROM_IMAG $dst (phys), $src (imag)
+  // Copy from imaginary register (DP location) to physical register
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+  unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+
+  if (DstReg == W65816::A) {
+    // Direct load: LDA $dp
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
+  } else if (DstReg == W65816::X) {
+    // LDX $dp
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_abs), W65816::X)
+        .addImm(DPAddr);
+  } else if (DstReg == W65816::Y) {
+    // LDY $dp
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_abs), W65816::Y)
+        .addImm(DPAddr);
+  } else {
+    // Destination is another imaginary register - load then store
+    unsigned DstDPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+        .addImm(DPAddr);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DstDPAddr);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandCOPY_IMAG_TO_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // COPY_IMAG_TO_IMAG $dst (imag), $src (imag)
+  // Copy between two imaginary registers
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+  unsigned SrcDPAddr = getImaginaryRegDPAddr(SrcReg);
+  unsigned DstDPAddr = getImaginaryRegDPAddr(DstReg);
+
+  // Load from source, store to destination
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+      .addImm(SrcDPAddr);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+      .addReg(W65816::A)
+      .addImm(DstDPAddr);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandMOV_IMAG_ri(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // MOV_IMAG_ri $dst (imag), $imm
+  // Load immediate into imaginary register
+  Register DstReg = MI.getOperand(0).getReg();
+  int64_t Imm = MI.getOperand(1).getImm();
+  unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+
+  // LDA #imm + STA $dp
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A)
+      .addImm(Imm);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+      .addReg(W65816::A)
+      .addImm(DPAddr);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandADD_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // ADD_IMAG $dst, $src1 (A), $src2 (imag)
+  // A = A + imaginary_reg
+  Register SrcReg = MI.getOperand(2).getReg();
+  unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+
+  // CLC + ADC $dp
+  buildMI(MBB, MBBI, W65816::CLC);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::ADC_dp), W65816::A)
+      .addImm(DPAddr);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSUB_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // SUB_IMAG $dst, $src1 (A), $src2 (imag)
+  // A = A - imaginary_reg
+  Register SrcReg = MI.getOperand(2).getReg();
+  unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+
+  // SEC + SBC $dp
+  buildMI(MBB, MBBI, W65816::SEC);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_dp), W65816::A)
+      .addImm(DPAddr);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandCMP_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // CMP_IMAG $lhs (A), $rhs (imag)
+  // Compare A with imaginary register
+  Register RhsReg = MI.getOperand(1).getReg();
+  unsigned DPAddr = getImaginaryRegDPAddr(RhsReg);
+
+  // CMP $dp
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_dp))
+      .addReg(W65816::A)
+      .addImm(DPAddr);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandAND_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // AND_IMAG $dst, $src1 (A), $src2 (imag)
+  Register SrcReg = MI.getOperand(2).getReg();
+  unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+
+  // AND $dp
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_dp), W65816::A)
+      .addImm(DPAddr);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandORA_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // ORA_IMAG $dst, $src1 (A), $src2 (imag)
+  Register SrcReg = MI.getOperand(2).getReg();
+  unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+
+  // ORA $dp
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_dp), W65816::A)
+      .addImm(DPAddr);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandEOR_IMAG(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // EOR_IMAG $dst, $src1 (A), $src2 (imag)
+  Register SrcReg = MI.getOperand(2).getReg();
+  unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+
+  // EOR $dp
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_dp), W65816::A)
+      .addImm(DPAddr);
 
   MI.eraseFromParent();
   return true;

@@ -35,6 +35,16 @@ W65816InstrInfo::W65816InstrInfo(const W65816Subtarget &STI)
     : W65816GenInstrInfo(STI, RI, W65816::ADJCALLSTACKDOWN, W65816::ADJCALLSTACKUP),
       RI(), STI(STI) {}
 
+// Helper to check if a register is an imaginary register (RS0-RS15)
+static bool isImaginaryReg(Register Reg) {
+  return W65816::IMAG16RegClass.contains(Reg);
+}
+
+// Helper to check if a register is a physical GPR (A, X, Y)
+static bool isPhysicalGPR(Register Reg) {
+  return Reg == W65816::A || Reg == W65816::X || Reg == W65816::Y;
+}
+
 void W65816InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                   MachineBasicBlock::iterator MI,
                                   const DebugLoc &DL, Register DestReg,
@@ -44,12 +54,40 @@ void W65816InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   // - A <-> X: TAX, TXA
   // - A <-> Y: TAY, TYA
   // - X <-> Y: TXY, TYX (direct transfers, don't clobber A!)
+  // - Physical <-> Imaginary: via pseudos (expanded later)
+  // - Imaginary <-> Imaginary: via pseudo (expanded later)
 
   if (W65816::ACC16RegClass.contains(DestReg, SrcReg)) {
     // A to A - no-op
     return;
   }
 
+  // Handle imaginary registers
+  bool SrcIsImag = isImaginaryReg(SrcReg);
+  bool DstIsImag = isImaginaryReg(DestReg);
+
+  if (SrcIsImag && DstIsImag) {
+    // Imaginary to imaginary: use COPY_IMAG_TO_IMAG pseudo
+    BuildMI(MBB, MI, DL, get(W65816::COPY_IMAG_TO_IMAG), DestReg)
+        .addReg(SrcReg, getKillRegState(KillSrc));
+    return;
+  }
+
+  if (SrcIsImag && isPhysicalGPR(DestReg)) {
+    // Imaginary to physical: use COPY_FROM_IMAG pseudo
+    BuildMI(MBB, MI, DL, get(W65816::COPY_FROM_IMAG), DestReg)
+        .addReg(SrcReg, getKillRegState(KillSrc));
+    return;
+  }
+
+  if (DstIsImag && isPhysicalGPR(SrcReg)) {
+    // Physical to imaginary: use COPY_TO_IMAG pseudo
+    BuildMI(MBB, MI, DL, get(W65816::COPY_TO_IMAG), DestReg)
+        .addReg(SrcReg, getKillRegState(KillSrc));
+    return;
+  }
+
+  // Physical to physical copies
   if (W65816::GPR16RegClass.contains(DestReg) &&
       W65816::GPR16RegClass.contains(SrcReg)) {
     if (SrcReg == W65816::A) {
@@ -151,6 +189,15 @@ void W65816InstrInfo::storeRegToStackSlot(
           .addFrameIndex(FrameIndex)
           .addMemOperand(MMO);
       BuildMI(MBB, MI, DL, get(W65816::PLA));
+    } else if (isImaginaryReg(SrcReg)) {
+      // Imaginary register: load from DP to A, then store to stack
+      // Use COPY_FROM_IMAG to get value to A, then STA_sr
+      BuildMI(MBB, MI, DL, get(W65816::COPY_FROM_IMAG), W65816::A)
+          .addReg(SrcReg, getKillRegState(isKill));
+      BuildMI(MBB, MI, DL, get(W65816::STA_sr))
+          .addReg(W65816::A, RegState::Kill)
+          .addFrameIndex(FrameIndex)
+          .addMemOperand(MMO);
     } else if (SrcReg.isVirtual()) {
       // Use SPILL_GPR16 pseudo for virtual registers.
       // This doesn't constrain to ACC16, giving the allocator flexibility.
@@ -162,6 +209,14 @@ void W65816InstrInfo::storeRegToStackSlot(
     } else {
       llvm_unreachable("Unknown GPR16 register");
     }
+  } else if (W65816::IMAG16RegClass.hasSubClassEq(RC)) {
+    // Imaginary register class: load from DP to A, then store to stack
+    BuildMI(MBB, MI, DL, get(W65816::COPY_FROM_IMAG), W65816::A)
+        .addReg(SrcReg, getKillRegState(isKill));
+    BuildMI(MBB, MI, DL, get(W65816::STA_sr))
+        .addReg(W65816::A, RegState::Kill)
+        .addFrameIndex(FrameIndex)
+        .addMemOperand(MMO);
   } else {
     llvm_unreachable("Can't store this register class to stack slot");
   }
@@ -200,11 +255,27 @@ void W65816InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
         .addFrameIndex(FrameIndex)
         .addMemOperand(MMO);
   } else if (W65816::GPR16RegClass.hasSubClassEq(RC)) {
-    // GPR16 includes A, X, Y - use the pseudo for all cases
-    // The pseudo expansion will handle the A save/restore when needed
-    BuildMI(MBB, MI, DL, get(W65816::RELOAD_GPR16), DestReg)
+    // GPR16 includes A, X, Y and imaginary registers
+    if (isImaginaryReg(DestReg)) {
+      // Imaginary register: load from stack to A, then store to DP
+      BuildMI(MBB, MI, DL, get(W65816::LDA_sr), W65816::A)
+          .addFrameIndex(FrameIndex)
+          .addMemOperand(MMO);
+      BuildMI(MBB, MI, DL, get(W65816::COPY_TO_IMAG), DestReg)
+          .addReg(W65816::A, RegState::Kill);
+    } else {
+      // The pseudo expansion will handle the A save/restore when needed
+      BuildMI(MBB, MI, DL, get(W65816::RELOAD_GPR16), DestReg)
+          .addFrameIndex(FrameIndex)
+          .addMemOperand(MMO);
+    }
+  } else if (W65816::IMAG16RegClass.hasSubClassEq(RC)) {
+    // Imaginary register class: load from stack to A, then store to DP
+    BuildMI(MBB, MI, DL, get(W65816::LDA_sr), W65816::A)
         .addFrameIndex(FrameIndex)
         .addMemOperand(MMO);
+    BuildMI(MBB, MI, DL, get(W65816::COPY_TO_IMAG), DestReg)
+        .addReg(W65816::A, RegState::Kill);
   } else {
     llvm_unreachable("Can't load this register class from stack slot");
   }

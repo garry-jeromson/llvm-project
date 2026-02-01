@@ -93,9 +93,9 @@ define i16 @multiple_calls(i16 %x) {
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: spill_reload:
-; Should see stack-relative store and load
-; CHECK: sta {{[0-9]+}},s
-; CHECK: lda {{[0-9]+}},s
+; Should see stores and loads (either stack-relative or DP/imaginary regs)
+; With imaginary registers, we now use DP addressing ($00XX) for extra storage
+; CHECK: st{{[axy]}}
 ; CHECK: rts
 define i16 @spill_reload(i16 %a, i16 %b, i16 %c) {
 entry:

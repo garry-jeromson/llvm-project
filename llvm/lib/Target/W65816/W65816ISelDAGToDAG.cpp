@@ -685,7 +685,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       if (!isa<FrameIndexSDNode>(Addr) &&
           Addr.getOpcode() != W65816ISD::WRAPPER &&
           Addr.getOpcode() != ISD::ADD &&
-          !isa<GlobalAddressSDNode>(Addr)) {
+          !isa<GlobalAddressSDNode>(Addr) &&
+          !isa<ConstantSDNode>(Addr)) {
 
         // The address is in a register - use stack-relative indirect with mode switch
         MachineFunction &MF = CurDAG->getMachineFunction();
@@ -1101,12 +1102,27 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
+      // Check for constant (immediate) address: load from inttoptr (i16 N to ptr)
+      // This handles volatile hardware register access like *(volatile u8*)0x420C
+      if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr)) {
+        // Use LDA8_abs with the constant address
+        SDValue TargetAddr = CurDAG->getTargetConstant(CN->getZExtValue(), DL, MVT::i16);
+        SDValue Ops[] = {TargetAddr, Chain};
+        SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
+        MachineSDNode *Load =
+            CurDAG->getMachineNode(W65816::LDA8_abs, DL, VTs, Ops);
+        CurDAG->setNodeMemRefs(Load, {LD->getMemOperand()});
+        ReplaceNode(N, Load);
+        return;
+      }
+
       // Check for simple pointer dereference through register
       // This handles cases like *(u8*)ptr where ptr is in a register
       if (!isa<FrameIndexSDNode>(Addr) &&
           Addr.getOpcode() != W65816ISD::WRAPPER &&
           Addr.getOpcode() != ISD::ADD &&
-          !isa<GlobalAddressSDNode>(Addr)) {
+          !isa<GlobalAddressSDNode>(Addr) &&
+          !isa<ConstantSDNode>(Addr)) {
 
         // The address is in a register - use stack-relative indirect with mode switch
         MachineFunction &MF = CurDAG->getMachineFunction();

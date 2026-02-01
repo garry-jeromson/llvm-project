@@ -337,7 +337,7 @@ def STA_abs_m8 : W65816Inst24<0x8D, (outs), (ins ACC8:$src, addr16:$addr),
                               [(store ACC8:$src, addr:$addr)]>;
 
 // Stack-relative addressing modes for load/store
-let Defs = [P] in {
+let Defs = [P], mayLoad = 1 in {
   // LDA Stack Relative - lda offset,s
   // Note: operand name must match encoding field 'imm'
   def LDA_sr : W65816Inst16<0xA3, (outs ACC16:$dst), (ins imm8:$imm),
@@ -398,6 +398,90 @@ let Defs = [P], isAsCheapAsAMove = 1, isReMaterializable = 1,
   def MOV16ri_acc8 : Pseudo<(outs IDX16:$dst), (ins imm16:$imm),
                             "# MOV16ri_acc8 $dst, $imm",
                             [(set IDX16:$dst, imm:$imm)]>;
+}
+
+//===----------------------------------------------------------------------===//
+// Imaginary Register Pseudo Instructions
+//===----------------------------------------------------------------------===//
+// These pseudos handle operations on imaginary registers (RS0-RS15) which
+// are backed by Direct Page memory locations. They allow the register
+// allocator to use DP locations as additional registers.
+//
+// After register allocation, these pseudos are expanded to actual
+// LDA/STA instructions with DP addressing modes.
+
+// COPY_TO_IMAG - Copy from physical register or memory to imaginary register
+// Used for spilling and register moves involving imaginary registers
+// Expanded to: STA $dp (if src is A) or TXA/TYA + STA $dp (if src is X/Y)
+let mayStore = 1, hasSideEffects = 0 in {
+  def COPY_TO_IMAG : Pseudo<(outs IMAG16:$dst), (ins GPR16:$src),
+                            "# COPY_TO_IMAG $dst, $src", []>;
+}
+
+// COPY_FROM_IMAG - Copy from imaginary register to physical register
+// Used for reloading and register moves involving imaginary registers
+// Expanded to: LDA $dp (+ TAX/TAY if dst is X/Y)
+let mayLoad = 1, hasSideEffects = 0, Defs = [P] in {
+  def COPY_FROM_IMAG : Pseudo<(outs GPR16:$dst), (ins IMAG16:$src),
+                              "# COPY_FROM_IMAG $dst, $src", []>;
+}
+
+// COPY_IMAG_TO_IMAG - Copy between two imaginary registers
+// Expanded to: LDA $dp_src + STA $dp_dst
+let mayLoad = 1, mayStore = 1, hasSideEffects = 0, Defs = [P] in {
+  def COPY_IMAG_TO_IMAG : Pseudo<(outs IMAG16:$dst), (ins IMAG16:$src),
+                                 "# COPY_IMAG_TO_IMAG $dst, $src", []>;
+}
+
+// MOV_IMAG_ri - Load immediate into imaginary register
+// Expanded to: LDA #imm + STA $dp
+// No pattern because the combined load+store doesn't match a simple set pattern
+let mayLoad = 0, mayStore = 1, hasSideEffects = 0, Defs = [P],
+    isAsCheapAsAMove = 1, isReMaterializable = 1 in {
+  def MOV_IMAG_ri : Pseudo<(outs IMAG16:$dst), (ins imm16:$imm),
+                           "# MOV_IMAG_ri $dst, $imm", []>;
+}
+
+// ADD_IMAG - Add imaginary register to accumulator
+// Expanded to: CLC + ADC $dp
+let Defs = [P], Uses = [P] in {
+  def ADD_IMAG : Pseudo<(outs ACC16:$dst), (ins ACC16:$src1, IMAG16:$src2),
+                        "# ADD_IMAG $dst, $src1, $src2", []>;
+}
+
+// SUB_IMAG - Subtract imaginary register from accumulator
+// Expanded to: SEC + SBC $dp
+let Defs = [P], Uses = [P] in {
+  def SUB_IMAG : Pseudo<(outs ACC16:$dst), (ins ACC16:$src1, IMAG16:$src2),
+                        "# SUB_IMAG $dst, $src1, $src2", []>;
+}
+
+// CMP_IMAG - Compare accumulator with imaginary register
+// Expanded to: CMP $dp
+let Defs = [P] in {
+  def CMP_IMAG : Pseudo<(outs), (ins ACC16:$lhs, IMAG16:$rhs),
+                        "# CMP_IMAG $lhs, $rhs", []>;
+}
+
+// AND_IMAG - AND imaginary register with accumulator
+// Expanded to: AND $dp
+let Defs = [P] in {
+  def AND_IMAG : Pseudo<(outs ACC16:$dst), (ins ACC16:$src1, IMAG16:$src2),
+                        "# AND_IMAG $dst, $src1, $src2", []>;
+}
+
+// ORA_IMAG - OR imaginary register with accumulator
+// Expanded to: ORA $dp
+let Defs = [P] in {
+  def ORA_IMAG : Pseudo<(outs ACC16:$dst), (ins ACC16:$src1, IMAG16:$src2),
+                        "# ORA_IMAG $dst, $src1, $src2", []>;
+}
+
+// EOR_IMAG - XOR imaginary register with accumulator
+// Expanded to: EOR $dp
+let Defs = [P] in {
+  def EOR_IMAG : Pseudo<(outs ACC16:$dst), (ins ACC16:$src1, IMAG16:$src2),
+                        "# EOR_IMAG $dst, $src1, $src2", []>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -782,6 +866,10 @@ let Defs = [P] in {
 
   def CMP_abs : W65816Inst24<0xCD, (outs), (ins ACC16:$src, addr16:$addr),
                              "cmp\t$addr", []>;
+
+  // CMP direct page
+  def CMP_dp : W65816Inst16<0xC5, (outs), (ins ACC16:$src, addr8dp:$imm),
+                            "cmp\t$imm", []>;
 
   // CPX - Compare X Register
   // In 16-bit index mode, the immediate is 16-bit
@@ -2002,16 +2090,18 @@ let Defs = [P], mayLoad = 1, hasSideEffects = 0, Constraints = "$src = $dst" in 
 }
 
 // STA8_abs - Store 8-bit value (low byte of 16-bit reg) to absolute address
-// Expands to: SEP #$20; STA addr; REP #$20
+// Expands to: (TXA/TYA if needed); SEP #$20; STA addr; REP #$20
 // Note: Clobbers A during mode switch
+// Uses GPR16 to allow X/Y as source, giving register allocator more flexibility
 let Defs = [A, P], mayStore = 1, hasSideEffects = 0 in {
-  def STA8_abs : Pseudo<(outs), (ins ACC16:$src, addr16:$addr),
+  def STA8_abs : Pseudo<(outs), (ins GPR16:$src, addr16:$addr),
                         "# STA8_abs $src, $addr", []>;
 }
 
 // STA8_sr - Store 8-bit value to stack-relative address
+// Uses GPR16 to allow X/Y as source, giving register allocator more flexibility
 let Defs = [A, P], mayStore = 1, hasSideEffects = 0 in {
-  def STA8_sr : Pseudo<(outs), (ins ACC16:$src, imm8:$offset),
+  def STA8_sr : Pseudo<(outs), (ins GPR16:$src, imm8:$offset),
                        "# STA8_sr $src, $offset", []>;
 }
 
@@ -2024,9 +2114,10 @@ let Defs = [A, Y, P], mayLoad = 1, hasSideEffects = 0 in {
 }
 
 // STA8_srIndY - Store 8-bit value using stack-relative indirect indexed addressing
-// Expands to: SEP #$20; LDY #0; STA (offset,S),Y; REP #$20
-let Defs = [Y, P], Uses = [A], mayStore = 1, hasSideEffects = 0 in {
-  def STA8_srIndY : Pseudo<(outs), (ins ACC16:$src, imm8:$offset),
+// Expands to: (TXA/TYA if needed); SEP #$20; LDY #0; STA (offset,S),Y; REP #$20
+// Uses GPR16 to allow X/Y as source, giving register allocator more flexibility
+let Defs = [A, Y, P], mayStore = 1, hasSideEffects = 0 in {
+  def STA8_srIndY : Pseudo<(outs), (ins GPR16:$src, imm8:$offset),
                            "# STA8_srIndY $src, $offset", []>;
 }
 
