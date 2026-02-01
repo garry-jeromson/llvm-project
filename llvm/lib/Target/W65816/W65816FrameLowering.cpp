@@ -212,9 +212,13 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
   } else {
     // For larger stack sizes, use TSX/arithmetic/TXS
     // We need to preserve A since it may contain the return value
+    //
+    // Use TAY/TYA to save the return value (like small frame case).
+    // The old PHA/PLA approach was broken because the stack adjustment
+    // moved SP past the pushed value, causing PLA to pop from wrong location.
 
-    // Save return value (A) to stack temporarily
-    BuildMI(MBB, MBBI, DL, TII.get(W65816::PHA));
+    // Save return value (A) to Y temporarily
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::TAY));
 
     // TSX - Transfer SP to X
     BuildMI(MBB, MBBI, DL, TII.get(W65816::TSX));
@@ -225,7 +229,8 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
     // CLC - Clear Carry for addition
     BuildMI(MBB, MBBI, DL, TII.get(W65816::CLC));
 
-    // ADC #StackSize - Add stack size (plus 2 for the PHA we just did)
+    // ADC #StackSize+2 - Add stack size plus 2 for prologue PHA
+    // Prologue: PHA (2 bytes) + SBC #StackSize (StackSize bytes) = StackSize + 2
     BuildMI(MBB, MBBI, DL, TII.get(W65816::ADC_imm16), W65816::A)
         .addImm(StackSize + 2);
 
@@ -235,8 +240,8 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
     // TXS - Transfer X to SP
     BuildMI(MBB, MBBI, DL, TII.get(W65816::TXS));
 
-    // Restore return value (A) - now it's at offset 1 from SP
-    BuildMI(MBB, MBBI, DL, TII.get(W65816::PLA));
+    // Restore return value from Y
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::TYA));
   }
 
   // For interrupt handlers, restore saved registers
