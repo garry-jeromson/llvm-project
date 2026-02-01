@@ -750,27 +750,30 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   }
 
   // For unsigned/equality conditions, create the diamond pattern here
-  // Create the diamond pattern:
+  // Using PHI-free approach: store values to scratch DP, load in sink block
+  //
+  // This avoids PHI nodes that can conflict with existing PHIs in complex
+  // control flow, causing "Node emitted out of order" crashes.
+  //
+  // Pattern:
   //   MBB:
   //     cmp ...        (already done before Select16)
   //     bCC trueMBB
-  //     jmp falseMBB
+  //     bra falseMBB
   //   trueMBB:
-  //     copy trueVal   (value materialized here, in correct control flow path)
-  //     jmp sinkMBB
+  //     sta $FA        (store trueVal to scratch)
+  //     bra sinkMBB
   //   falseMBB:
-  //     copy falseVal  (value materialized here, in correct control flow path)
-  //     jmp sinkMBB
+  //     sta $FA        (store falseVal to scratch)
+  //     ; fall through to sinkMBB
   //   sinkMBB:
-  //     phi result
-  //
-  // The key fix: TrueReg and FalseReg may have been materialized BEFORE the
-  // branch (e.g., `lda #42` happens before `cmp`). By inserting COPY instructions
-  // inside TrueMBB and FalseMBB, we ensure the register allocator places the
-  // value-producing code in the correct control flow path.
+  //     lda $FA        (load result from scratch)
+
+  // Scratch DP address for select operations ($FA-$FB)
+  // This is separate from spill/reload ($FC-$FD) and ALU ($FE-$FF)
+  const unsigned SELECT_SCRATCH_DP = 0xFA;
 
   MachineFunction *MF = MBB->getParent();
-  MachineRegisterInfo &MRI = MF->getRegInfo();
   const BasicBlock *BB = MBB->getBasicBlock();
   MachineFunction::iterator It = ++MBB->getIterator();
 
@@ -787,37 +790,51 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
                   std::next(MachineBasicBlock::iterator(MI)), MBB->end());
   SinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
 
-  // For unsigned/equality conditions, use single branch
   // Add edges: MBB -> TrueMBB, MBB -> FalseMBB
   MBB->addSuccessor(TrueMBB);
   MBB->addSuccessor(FalseMBB);
 
-  // Simple case: single branch instruction
+  // Emit conditional branch to TrueMBB, unconditional to FalseMBB
   unsigned BranchOpc = getBranchOpcodeForCond(CondCode);
   BuildMI(MBB, DL, TII.get(BranchOpc)).addMBB(TrueMBB);
   BuildMI(MBB, DL, TII.get(W65816::BRA)).addMBB(FalseMBB);
 
-  // Create new virtual registers for the values in each block
-  // This ensures the value copies happen in the correct control flow path
-  Register TrueResult = MRI.createVirtualRegister(&W65816::GPR16RegClass);
-  Register FalseResult = MRI.createVirtualRegister(&W65816::GPR16RegClass);
-
-  // TrueMBB: copy TrueReg to TrueResult, then fall through to SinkMBB
+  // TrueMBB: Move TrueReg to A, store to scratch, branch to SinkMBB
   TrueMBB->addSuccessor(SinkMBB);
-  BuildMI(TrueMBB, DL, TII.get(TargetOpcode::COPY), TrueResult).addReg(TrueReg);
+  if (TrueReg == W65816::X) {
+    BuildMI(TrueMBB, DL, TII.get(W65816::TXA));
+  } else if (TrueReg == W65816::Y) {
+    BuildMI(TrueMBB, DL, TII.get(W65816::TYA));
+  } else if (TrueReg != W65816::A) {
+    // Virtual register or imaginary register - need to load to A first
+    BuildMI(TrueMBB, DL, TII.get(TargetOpcode::COPY), W65816::A).addReg(TrueReg);
+  }
+  BuildMI(TrueMBB, DL, TII.get(W65816::STA_dp)).addReg(W65816::A).addImm(SELECT_SCRATCH_DP);
   BuildMI(TrueMBB, DL, TII.get(W65816::BRA)).addMBB(SinkMBB);
 
-  // FalseMBB: copy FalseReg to FalseResult, then branch to SinkMBB
+  // FalseMBB: Move FalseReg to A, store to scratch, fall through to SinkMBB
   FalseMBB->addSuccessor(SinkMBB);
-  BuildMI(FalseMBB, DL, TII.get(TargetOpcode::COPY), FalseResult).addReg(FalseReg);
-  BuildMI(FalseMBB, DL, TII.get(W65816::BRA)).addMBB(SinkMBB);
+  if (FalseReg == W65816::X) {
+    BuildMI(FalseMBB, DL, TII.get(W65816::TXA));
+  } else if (FalseReg == W65816::Y) {
+    BuildMI(FalseMBB, DL, TII.get(W65816::TYA));
+  } else if (FalseReg != W65816::A) {
+    BuildMI(FalseMBB, DL, TII.get(TargetOpcode::COPY), W65816::A).addReg(FalseReg);
+  }
+  BuildMI(FalseMBB, DL, TII.get(W65816::STA_dp)).addReg(W65816::A).addImm(SELECT_SCRATCH_DP);
+  // No branch needed - falls through to SinkMBB
 
-  // SinkMBB has the PHI node using the block-local copies
-  BuildMI(*SinkMBB, SinkMBB->begin(), DL, TII.get(TargetOpcode::PHI), DstReg)
-      .addReg(TrueResult)
-      .addMBB(TrueMBB)
-      .addReg(FalseResult)
-      .addMBB(FalseMBB);
+  // SinkMBB: Load result from scratch to A, then move to DstReg
+  // Insert at the beginning of SinkMBB (before any spliced instructions)
+  auto InsertPt = SinkMBB->begin();
+  BuildMI(*SinkMBB, InsertPt, DL, TII.get(W65816::LDA_dp), W65816::A).addImm(SELECT_SCRATCH_DP);
+  if (DstReg == W65816::X) {
+    BuildMI(*SinkMBB, InsertPt, DL, TII.get(W65816::TAX));
+  } else if (DstReg == W65816::Y) {
+    BuildMI(*SinkMBB, InsertPt, DL, TII.get(W65816::TAY));
+  } else if (DstReg != W65816::A) {
+    BuildMI(*SinkMBB, InsertPt, DL, TII.get(TargetOpcode::COPY), DstReg).addReg(W65816::A);
+  }
 
   MI.eraseFromParent();
   return SinkMBB;
