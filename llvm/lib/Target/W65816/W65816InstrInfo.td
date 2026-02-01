@@ -1820,14 +1820,16 @@ let Uses = [P] in {
 }
 
 // Compare two registers pseudo - sets flags for subsequent branch
-// Expands to: get src1 to A, push src2, cmp 1,s, pull
-let Defs = [P] in {
+// Expands to: get src1 to A, use DP scratch for src2, SEC + SBC
+// NOTE: Clobbers A because comparison always uses A for the subtraction
+let Defs = [A, P] in {
   def CMP16rr : Pseudo<(outs), (ins GPR16:$src1, GPR16:$src2),
                        "# CMP16rr $src1, $src2",
                        [(W65816cmp GPR16:$src1, GPR16:$src2)]>;
 
   // Compare register with immediate - more efficient for constants
   // Expands to: get src to A, cmp #imm
+  // NOTE: Clobbers A because comparison uses A for the subtraction
   def CMP16ri : Pseudo<(outs), (ins GPR16:$src, i16imm:$imm),
                        "# CMP16ri $src, $imm",
                        [(W65816cmp GPR16:$src, imm:$imm)]>;
