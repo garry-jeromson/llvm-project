@@ -232,6 +232,29 @@ const char *W65816TargetLowering::getTargetNodeName(unsigned Opcode) const {
   }
 }
 
+Sched::Preference W65816TargetLowering::getSchedulingPreference(SDNode *N) const {
+  // For nodes that directly feed into CopyToReg (call arguments, return values),
+  // use source order to reduce register pressure from conflicting live ranges.
+  // This helps the W65816 which only has 3 physical registers (A, X, Y).
+  if (N->hasOneUse()) {
+    SDNode *User = *N->user_begin();
+    if (User->getOpcode() == ISD::CopyToReg) {
+      return Sched::Source;
+    }
+  }
+
+  // For nodes producing multiple values where some feed into CopyToReg,
+  // also prefer source order
+  for (SDNode *User : N->users()) {
+    if (User->getOpcode() == ISD::CopyToReg) {
+      return Sched::Source;
+    }
+  }
+
+  // Default: let the global setting (RegPressure) handle it
+  return Sched::None;
+}
+
 SDValue W65816TargetLowering::LowerOperation(SDValue Op,
                                              SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {

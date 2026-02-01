@@ -85,6 +85,11 @@ public:
     return MVT::i16;
   }
 
+  /// Override scheduling preference for specific nodes.
+  /// Nodes feeding into CopyToReg should maintain source order to reduce
+  /// register pressure from conflicting live ranges.
+  Sched::Preference getSchedulingPreference(SDNode *N) const override;
+
 private:
   const W65816Subtarget &Subtarget;
 
