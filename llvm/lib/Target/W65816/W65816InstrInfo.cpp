@@ -12,10 +12,10 @@
 
 #include "W65816InstrInfo.h"
 
+#include "MCTargetDesc/W65816MCTargetDesc.h"
 #include "W65816.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
 
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -32,7 +32,8 @@
 using namespace llvm;
 
 W65816InstrInfo::W65816InstrInfo(const W65816Subtarget &STI)
-    : W65816GenInstrInfo(STI, RI, W65816::ADJCALLSTACKDOWN, W65816::ADJCALLSTACKUP),
+    : W65816GenInstrInfo(STI, RI, W65816::ADJCALLSTACKDOWN,
+                         W65816::ADJCALLSTACKUP),
       RI(), STI(STI) {}
 
 // Helper to check if a register is an imaginary register (RS0-RS15)
@@ -122,8 +123,8 @@ void W65816InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
 
 void W65816InstrInfo::storeRegToStackSlot(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register SrcReg,
-    bool isKill, int FrameIndex, const TargetRegisterClass *RC,
-    Register VReg, MachineInstr::MIFlag Flags) const {
+    bool isKill, int FrameIndex, const TargetRegisterClass *RC, Register VReg,
+    MachineInstr::MIFlag Flags) const {
   DebugLoc DL;
   if (MI != MBB.end()) {
     DL = MI->getDebugLoc();
@@ -146,13 +147,13 @@ void W65816InstrInfo::storeRegToStackSlot(
         .addReg(SrcReg, getKillRegState(isKill))
         .addFrameIndex(FrameIndex)
         .addMemOperand(MMO);
-  } else if (W65816::IDX16RegClass.hasSubClassEq(RC) ||
-             SrcReg == W65816::X || SrcReg == W65816::Y) {
+  } else if (W65816::IDX16RegClass.hasSubClassEq(RC) || SrcReg == W65816::X ||
+             SrcReg == W65816::Y) {
     // For X/Y, we need to transfer to A first, then store
     // Problem: TXA/TYA clobbers A, but A might have a live value!
     // Solution: Save A to the hardware stack first, then restore after
     // This is expensive but correct for register pressure situations
-    BuildMI(MBB, MI, DL, get(W65816::PHA));  // Save A to hardware stack
+    BuildMI(MBB, MI, DL, get(W65816::PHA)); // Save A to hardware stack
     if (SrcReg == W65816::X) {
       BuildMI(MBB, MI, DL, get(W65816::TXA));
     } else {
@@ -162,7 +163,7 @@ void W65816InstrInfo::storeRegToStackSlot(
         .addReg(W65816::A, RegState::Kill)
         .addFrameIndex(FrameIndex)
         .addMemOperand(MMO);
-    BuildMI(MBB, MI, DL, get(W65816::PLA));  // Restore A from hardware stack
+    BuildMI(MBB, MI, DL, get(W65816::PLA)); // Restore A from hardware stack
   } else if (W65816::GPR16RegClass.hasSubClassEq(RC)) {
     // GPR16 includes A, X, Y - handle based on physical reg
     // During spilling, SrcReg might be a virtual register
@@ -247,8 +248,8 @@ void W65816InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     BuildMI(MBB, MI, DL, get(W65816::LDA_sr), DestReg)
         .addFrameIndex(FrameIndex)
         .addMemOperand(MMO);
-  } else if (W65816::IDX16RegClass.hasSubClassEq(RC) ||
-             DestReg == W65816::X || DestReg == W65816::Y) {
+  } else if (W65816::IDX16RegClass.hasSubClassEq(RC) || DestReg == W65816::X ||
+             DestReg == W65816::Y) {
     // For X/Y, we need to use a pseudo that hides the internal A usage
     // from the register allocator. This will be expanded after RA.
     BuildMI(MBB, MI, DL, get(W65816::RELOAD_GPR16), DestReg)
@@ -326,12 +327,9 @@ bool W65816InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   return false;
 }
 
-unsigned W65816InstrInfo::insertBranch(MachineBasicBlock &MBB,
-                                       MachineBasicBlock *TBB,
-                                       MachineBasicBlock *FBB,
-                                       ArrayRef<MachineOperand> Cond,
-                                       const DebugLoc &DL,
-                                       int *BytesAdded) const {
+unsigned W65816InstrInfo::insertBranch(
+    MachineBasicBlock &MBB, MachineBasicBlock *TBB, MachineBasicBlock *FBB,
+    ArrayRef<MachineOperand> Cond, const DebugLoc &DL, int *BytesAdded) const {
   if (BytesAdded)
     *BytesAdded = 0;
 

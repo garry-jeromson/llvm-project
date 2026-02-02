@@ -11,13 +11,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MCTargetDesc/W65816InstPrinter.h"
+#include "MCTargetDesc/W65816MCTargetDesc.h"
+#include "TargetInfo/W65816TargetInfo.h"
 #include "W65816.h"
 #include "W65816MCInstLower.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
-#include "MCTargetDesc/W65816InstPrinter.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
-#include "TargetInfo/W65816TargetInfo.h"
 
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineFunction.h"

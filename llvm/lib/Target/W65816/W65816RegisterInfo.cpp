@@ -12,11 +12,12 @@
 
 #include "W65816RegisterInfo.h"
 
+#include "MCTargetDesc/W65816MCTargetDesc.h"
 #include "W65816.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
 
+#include "W65816MachineFunctionInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -25,7 +26,6 @@
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "W65816MachineFunctionInfo.h"
 
 #define GET_REGINFO_TARGET_DESC
 #include "W65816GenRegisterInfo.inc"
@@ -88,8 +88,8 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
 
     // Validate offset fits in DP range (0-255 bytes)
     if (Offset < 0 || Offset >= 256) {
-      report_fatal_error("Direct Page frame exceeds 256-byte limit (offset " +
-                         Twine(Offset) + " out of range). Use stack frame instead.");
+      report_fatal_error("direct page frame exceeds 256-byte limit (offset " +
+                         Twine(Offset) + " out of range)");
     }
 
     // Convert instruction to DP addressing mode
@@ -156,7 +156,8 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
   // - Incoming: fixed, offset >= 0, but not in outgoing area (or no calls)
 
   if (IsFixed && Offset >= 0) {
-    if (MaxCallFrameSize > 0 && (uint64_t)Offset < MaxCallFrameSize) {
+    if (MaxCallFrameSize > 0 &&
+        static_cast<uint64_t>(Offset) < MaxCallFrameSize) {
       // Outgoing call argument - at bottom of caller's pre-allocated frame
       Offset += 1;
     } else {

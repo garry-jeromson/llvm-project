@@ -12,11 +12,11 @@
 
 #include "W65816TargetMachine.h"
 
+#include "MCTargetDesc/W65816MCTargetDesc.h"
+#include "TargetInfo/W65816TargetInfo.h"
 #include "W65816.h"
 #include "W65816MachineFunctionInfo.h"
 #include "W65816TargetObjectFile.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
-#include "TargetInfo/W65816TargetInfo.h"
 
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
@@ -41,16 +41,13 @@ static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
 static std::string computeDataLayoutString() {
   // e = little endian
   // m:e = ELF mangling
-  // p:16:16 = 16-bit pointers, 16-bit aligned (prevents decomposition to byte loads)
-  // i8:8 = 8-bit integers, 8-bit aligned
-  // i16:16 = 16-bit integers, 16-bit aligned
-  // i32:16 = 32-bit integers, 16-bit aligned (matches Clang's LongAlign)
-  // i64:16 = 64-bit integers, 16-bit aligned
-  // f32:16 = 32-bit floats, 16-bit aligned
-  // f64:16 = 64-bit floats, 16-bit aligned
-  // a:8 = aggregates, 8-bit aligned
-  // n8:16 = native integer widths are 8 and 16 bits
-  // S16 = stack natural alignment is 16 bits
+  // p:16:16 = 16-bit pointers, 16-bit aligned (prevents decomposition to byte
+  // loads) i8:8 = 8-bit integers, 8-bit aligned i16:16 = 16-bit integers,
+  // 16-bit aligned i32:16 = 32-bit integers, 16-bit aligned (matches Clang's
+  // LongAlign) i64:16 = 64-bit integers, 16-bit aligned f32:16 = 32-bit floats,
+  // 16-bit aligned f64:16 = 64-bit floats, 16-bit aligned a:8 = aggregates,
+  // 8-bit aligned n8:16 = native integer widths are 8 and 16 bits S16 = stack
+  // natural alignment is 16 bits
   return "e-m:e-p:16:16-i8:8-i16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16";
 }
 
@@ -60,8 +57,8 @@ W65816TargetMachine::W65816TargetMachine(const Target &T, const Triple &TT,
                                          std::optional<Reloc::Model> RM,
                                          std::optional<CodeModel::Model> CM,
                                          CodeGenOptLevel OL, bool JIT)
-    : CodeGenTargetMachineImpl(T, computeDataLayoutString(), TT, getCPU(CPU), FS,
-                               Options, getEffectiveRelocModel(RM),
+    : CodeGenTargetMachineImpl(T, computeDataLayoutString(), TT, getCPU(CPU),
+                               FS, Options, getEffectiveRelocModel(RM),
                                getEffectiveCodeModel(CM, CodeModel::Small), OL),
       Subtarget(TT, std::string(getCPU(CPU)), std::string(FS), *this) {
   TLOF = std::make_unique<W65816TargetObjectFile>();
@@ -104,8 +101,8 @@ void W65816PassConfig::addPreEmitPass() {
 MachineFunctionInfo *W65816TargetMachine::createMachineFunctionInfo(
     BumpPtrAllocator &Allocator, const Function &F,
     const TargetSubtargetInfo *STI) const {
-  return W65816MachineFunctionInfo::create<W65816MachineFunctionInfo>(
-      Allocator, F, STI);
+  return W65816MachineFunctionInfo::create<W65816MachineFunctionInfo>(Allocator,
+                                                                      F, STI);
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeW65816Target() {

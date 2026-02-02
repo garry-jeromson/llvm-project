@@ -40,8 +40,8 @@ class W65816MachineFunctionInfo : public MachineFunctionInfo {
   /// Whether this function uses Direct Page (DP) for local variable allocation.
   /// When enabled, locals are allocated in the 256-byte direct page region
   /// (addresses $00-$FF when D=0) instead of on the stack. This allows using
-  /// faster 2-byte DP instructions instead of 2-byte stack-relative instructions.
-  /// Enabled via the "w65816_dpframe" function attribute.
+  /// faster 2-byte DP instructions instead of 2-byte stack-relative
+  /// instructions. Enabled via the "w65816_dpframe" function attribute.
   bool UsesDPFrame = false;
 
   /// Whether this function uses far/long calling convention (JSL/RTL).

@@ -16,9 +16,8 @@
 using namespace clang;
 using namespace clang::targets;
 
-const char *const W65816TargetInfo::GCCRegNames[] = {
-    "a", "x", "y", "sp", "d", "dbr", "pbr"
-};
+const char *const W65816TargetInfo::GCCRegNames[] = {"a", "x",   "y",  "sp",
+                                                     "d", "dbr", "pbr"};
 
 ArrayRef<const char *> W65816TargetInfo::getGCCRegNames() const {
   return llvm::ArrayRef(GCCRegNames);

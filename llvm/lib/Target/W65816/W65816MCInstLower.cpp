@@ -13,8 +13,8 @@
 
 #include "W65816MCInstLower.h"
 
-#include "W65816InstrInfo.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
+#include "W65816InstrInfo.h"
 
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"

@@ -21,7 +21,7 @@ using namespace llvm;
 
 W65816MCAsmInfo::W65816MCAsmInfo(const Triple &TT,
                                  const MCTargetOptions &Options) {
-  CodePointerSize = 2;     // 16-bit pointers (24-bit with bank)
+  CodePointerSize = 2; // 16-bit pointers (24-bit with bank)
   CalleeSaveStackSlotSize = 2;
   CommentString = ";";
   PrivateGlobalPrefix = ".L";
@@ -41,7 +41,7 @@ W65816MCAsmInfo::W65816MCAsmInfo(const Triple &TT,
   Data8bitsDirective = "\t.byte\t";
   Data16bitsDirective = "\t.word\t";
   Data32bitsDirective = "\t.long\t";
-  Data64bitsDirective = nullptr;  // 65816 doesn't support 64-bit natively
+  Data64bitsDirective = nullptr; // 65816 doesn't support 64-bit natively
 
   // Zero directive for BSS
   ZeroDirective = "\t.zero\t";

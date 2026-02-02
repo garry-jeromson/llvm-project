@@ -11,9 +11,11 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCParser/AsmLexer.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
 #include "llvm/MC/MCParser/MCTargetAsmParser.h"
@@ -22,8 +24,6 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 
@@ -40,7 +40,7 @@ public:
   enum KindTy {
     k_Token,
     k_Register,
-    k_Immediate,       // Address or immediate value
+    k_Immediate, // Address or immediate value
     // Indirect addressing modes
     k_IndirectAddr,      // (addr) - JMP indirect
     k_IndirectXAddr,     // (addr,x) - JMP indexed indirect
@@ -277,7 +277,7 @@ public:
   }
 
   static std::unique_ptr<W65816Operand> createReg(unsigned RegNo, SMLoc S,
-                                                   SMLoc E) {
+                                                  SMLoc E) {
     auto Op = std::make_unique<W65816Operand>(k_Register);
     Op->Reg.RegNum = RegNo;
     Op->StartLoc = S;
@@ -286,7 +286,7 @@ public:
   }
 
   static std::unique_ptr<W65816Operand> createImm(const MCExpr *Val, SMLoc S,
-                                                   SMLoc E) {
+                                                  SMLoc E) {
     auto Op = std::make_unique<W65816Operand>(k_Immediate);
     Op->Imm.Val = Val;
     Op->StartLoc = S;
@@ -294,10 +294,8 @@ public:
     return Op;
   }
 
-
-  static std::unique_ptr<W65816Operand> createIndirect(KindTy Kind,
-                                                        const MCExpr *Val,
-                                                        SMLoc S, SMLoc E) {
+  static std::unique_ptr<W65816Operand>
+  createIndirect(KindTy Kind, const MCExpr *Val, SMLoc S, SMLoc E) {
     auto Op = std::make_unique<W65816Operand>(Kind);
     Op->Imm.Val = Val;
     Op->StartLoc = S;
@@ -372,21 +370,21 @@ public:
 MCRegister W65816AsmParser::matchRegisterName(StringRef Name) {
   // Handle register names (case-insensitive)
   MCRegister Reg = StringSwitch<MCRegister>(Name.upper())
-    .Case("A", W65816::A)
-    .Case("X", W65816::X)
-    .Case("Y", W65816::Y)
-    .Case("S", W65816::SP)
-    .Case("SP", W65816::SP)
-    .Case("D", W65816::D)
-    .Case("DBR", W65816::DBR)
-    .Case("PBR", W65816::PBR)
-    .Case("P", W65816::P)
-    .Default(MCRegister());
+                       .Case("A", W65816::A)
+                       .Case("X", W65816::X)
+                       .Case("Y", W65816::Y)
+                       .Case("S", W65816::SP)
+                       .Case("SP", W65816::SP)
+                       .Case("D", W65816::D)
+                       .Case("DBR", W65816::DBR)
+                       .Case("PBR", W65816::PBR)
+                       .Case("P", W65816::P)
+                       .Default(MCRegister());
   return Reg;
 }
 
 bool W65816AsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc,
-                                     SMLoc &EndLoc) {
+                                    SMLoc &EndLoc) {
   ParseStatus Res = tryParseRegister(Reg, StartLoc, EndLoc);
   if (!Res.isSuccess())
     return true;
@@ -394,7 +392,7 @@ bool W65816AsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc,
 }
 
 ParseStatus W65816AsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
-                                               SMLoc &EndLoc) {
+                                              SMLoc &EndLoc) {
   StartLoc = getLexer().getLoc();
   const AsmToken &Tok = getLexer().getTok();
 
@@ -496,7 +494,8 @@ bool W65816AsmParser::parseParenExpr(OperandVector &Operands) {
       }
 
       // Plain (expr,s) without ,y - not a standard mode, treat as error
-      return Error(getLexer().getLoc(), "stack relative indirect requires ',y' suffix");
+      return Error(getLexer().getLoc(),
+                   "stack relative indirect requires ',y' suffix");
     }
 
     return Error(getLexer().getLoc(), "expected 'x' or 's' register");
@@ -529,8 +528,8 @@ bool W65816AsmParser::parseParenExpr(OperandVector &Operands) {
   // Parse as IndirectDP; the AsmMatcher validates operand size to
   // distinguish between DP indirect ($xx) and absolute indirect ($xxxx).
   SMLoc E = getLexer().getLoc();
-  Operands.push_back(W65816Operand::createIndirect(
-      W65816Operand::k_IndirectDP, Expr, S, E));
+  Operands.push_back(
+      W65816Operand::createIndirect(W65816Operand::k_IndirectDP, Expr, S, E));
   return false;
 }
 
@@ -617,8 +616,8 @@ bool W65816AsmParser::parseOperand(OperandVector &Operands) {
 }
 
 bool W65816AsmParser::parseInstruction(ParseInstructionInfo &Info,
-                                        StringRef Name, SMLoc NameLoc,
-                                        OperandVector &Operands) {
+                                       StringRef Name, SMLoc NameLoc,
+                                       OperandVector &Operands) {
   // Add the mnemonic as the first operand
   Operands.push_back(W65816Operand::createToken(Name, NameLoc));
 
@@ -647,10 +646,10 @@ bool W65816AsmParser::parseInstruction(ParseInstructionInfo &Info,
 }
 
 bool W65816AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
-                                               OperandVector &Operands,
-                                               MCStreamer &Out,
-                                               uint64_t &ErrorInfo,
-                                               bool MatchingInlineAsm) {
+                                              OperandVector &Operands,
+                                              MCStreamer &Out,
+                                              uint64_t &ErrorInfo,
+                                              bool MatchingInlineAsm) {
   MCInst Inst;
   unsigned MatchResult =
       MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm);
@@ -662,7 +661,8 @@ bool W65816AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     return false;
 
   case Match_MissingFeature:
-    return Error(IDLoc, "instruction requires a CPU feature not currently enabled");
+    return Error(IDLoc,
+                 "instruction requires a CPU feature not currently enabled");
 
   case Match_InvalidOperand: {
     SMLoc ErrorLoc = IDLoc;

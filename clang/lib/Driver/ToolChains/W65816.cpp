@@ -23,8 +23,7 @@ using namespace llvm::opt;
 /// W65816 Toolchain
 W65816ToolChain::W65816ToolChain(const Driver &D, const llvm::Triple &Triple,
                                  const ArgList &Args)
-    : Generic_ELF(D, Triple, Args) {
-}
+    : Generic_ELF(D, Triple, Args) {}
 
 void W65816ToolChain::addClangTargetOptions(
     const llvm::opt::ArgList &DriverArgs, llvm::opt::ArgStringList &CC1Args,

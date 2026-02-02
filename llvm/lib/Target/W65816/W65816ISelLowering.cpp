@@ -13,12 +13,12 @@
 
 #include "W65816ISelLowering.h"
 
+#include "MCTargetDesc/W65816MCTargetDesc.h"
 #include "W65816.h"
 #include "W65816InstrInfo.h"
 #include "W65816MachineFunctionInfo.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
 
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -116,7 +116,8 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::BR_CC, MVT::i8, Promote);
   setOperationAction(ISD::BR_CC, MVT::i16, Custom);
   // BRCOND: br i1 %cond - branch on boolean value
-  // We handle this by converting to our BRCOND node that checks if value is non-zero
+  // We handle this by converting to our BRCOND node that checks if value is
+  // non-zero
   setOperationAction(ISD::BRCOND, MVT::Other, Custom);
 
   // Select operations
@@ -206,7 +207,6 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::VAARG, MVT::Other, Expand);
   setOperationAction(ISD::VAEND, MVT::Other, Expand);
   setOperationAction(ISD::VACOPY, MVT::Other, Expand);
-
 }
 
 const char *W65816TargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -230,10 +230,12 @@ const char *W65816TargetLowering::getTargetNodeName(unsigned Opcode) const {
   }
 }
 
-Sched::Preference W65816TargetLowering::getSchedulingPreference(SDNode *N) const {
-  // For nodes that directly feed into CopyToReg (call arguments, return values),
-  // use source order to reduce register pressure from conflicting live ranges.
-  // This helps the W65816 which only has 3 physical registers (A, X, Y).
+Sched::Preference
+W65816TargetLowering::getSchedulingPreference(SDNode *N) const {
+  // For nodes that directly feed into CopyToReg (call arguments, return
+  // values), use source order to reduce register pressure from conflicting live
+  // ranges. This helps the W65816 which only has 3 physical registers (A, X,
+  // Y).
   if (N->hasOneUse()) {
     SDNode *User = *N->user_begin();
     if (User->getOpcode() == ISD::CopyToReg) {
@@ -291,22 +293,22 @@ SDValue W65816TargetLowering::LowerGlobalAddress(SDValue Op,
 // W65816 condition codes (used internally before expanding to branch opcodes)
 namespace W65816CC {
 enum CondCode {
-  COND_EQ = 0,  // Equal (Z=1)
-  COND_NE,      // Not equal (Z=0)
-  COND_CS,      // Carry set (C=1) - unsigned >=
-  COND_CC,      // Carry clear (C=0) - unsigned <
-  COND_MI,      // Minus (N=1)
-  COND_PL,      // Plus (N=0)
-  COND_VS,      // Overflow set (V=1)
-  COND_VC,      // Overflow clear (V=0)
+  COND_EQ = 0, // Equal (Z=1)
+  COND_NE,     // Not equal (Z=0)
+  COND_CS,     // Carry set (C=1) - unsigned >=
+  COND_CC,     // Carry clear (C=0) - unsigned <
+  COND_MI,     // Minus (N=1)
+  COND_PL,     // Plus (N=0)
+  COND_VS,     // Overflow set (V=1)
+  COND_VC,     // Overflow clear (V=0)
   // Signed comparisons (require multi-instruction sequences)
-  COND_SLT,     // Signed less than (N != V)
-  COND_SGE,     // Signed greater or equal (N == V)
-  COND_SGT,     // Signed greater than (Z == 0 && N == V)
-  COND_SLE,     // Signed less or equal (Z == 1 || N != V)
+  COND_SLT, // Signed less than (N != V)
+  COND_SGE, // Signed greater or equal (N == V)
+  COND_SGT, // Signed greater than (Z == 0 && N == V)
+  COND_SLE, // Signed less or equal (Z == 1 || N != V)
   // Unsigned compound comparisons (require multi-instruction sequences)
-  COND_UGT,     // Unsigned greater than (C == 1 && Z == 0)
-  COND_ULE,     // Unsigned less or equal (C == 0 || Z == 1)
+  COND_UGT, // Unsigned greater than (C == 1 && Z == 0)
+  COND_ULE, // Unsigned less or equal (C == 0 || Z == 1)
 };
 }
 
@@ -322,9 +324,9 @@ static W65816CC::CondCode getCondCodeForISD(ISD::CondCode CC) {
     return W65816CC::COND_NE;
   // Unsigned comparisons (use carry flag)
   case ISD::SETULT:
-    return W65816CC::COND_CC;  // Carry clear (A < B unsigned)
+    return W65816CC::COND_CC; // Carry clear (A < B unsigned)
   case ISD::SETUGE:
-    return W65816CC::COND_CS;  // Carry set (A >= B unsigned)
+    return W65816CC::COND_CS; // Carry set (A >= B unsigned)
   case ISD::SETUGT:
     // For A > B unsigned: need C=1 (A >= B) AND Z=0 (A != B)
     return W65816CC::COND_UGT;
@@ -333,15 +335,15 @@ static W65816CC::CondCode getCondCodeForISD(ISD::CondCode CC) {
     return W65816CC::COND_ULE;
   // Signed comparisons (require multi-instruction sequences)
   case ISD::SETLT:
-    return W65816CC::COND_SLT;  // N != V
+    return W65816CC::COND_SLT; // N != V
   case ISD::SETGE:
-    return W65816CC::COND_SGE;  // N == V
+    return W65816CC::COND_SGE; // N == V
   case ISD::SETGT:
-    return W65816CC::COND_SGT;  // Z == 0 && N == V
+    return W65816CC::COND_SGT; // Z == 0 && N == V
   case ISD::SETLE:
-    return W65816CC::COND_SLE;  // Z == 1 || N != V
+    return W65816CC::COND_SLE; // Z == 1 || N != V
   default:
-    return W65816CC::COND_NE;  // Default fallback
+    return W65816CC::COND_NE; // Default fallback
   }
 }
 
@@ -350,22 +352,31 @@ static W65816CC::CondCode getCondCodeForISD(ISD::CondCode CC) {
 // conditions and should be handled specially by the caller.
 static unsigned getBranchOpcodeForCond(W65816CC::CondCode CC) {
   switch (CC) {
-  case W65816CC::COND_EQ: return W65816::BEQ;
-  case W65816CC::COND_NE: return W65816::BNE;
-  case W65816CC::COND_CS: return W65816::BCS;
-  case W65816CC::COND_CC: return W65816::BCC;
-  case W65816CC::COND_MI: return W65816::BMI;
-  case W65816CC::COND_PL: return W65816::BPL;
-  case W65816CC::COND_VS: return W65816::BVS;
-  case W65816CC::COND_VC: return W65816::BVC;
+  case W65816CC::COND_EQ:
+    return W65816::BEQ;
+  case W65816CC::COND_NE:
+    return W65816::BNE;
+  case W65816CC::COND_CS:
+    return W65816::BCS;
+  case W65816CC::COND_CC:
+    return W65816::BCC;
+  case W65816CC::COND_MI:
+    return W65816::BMI;
+  case W65816CC::COND_PL:
+    return W65816::BPL;
+  case W65816CC::COND_VS:
+    return W65816::BVS;
+  case W65816CC::COND_VC:
+    return W65816::BVC;
   // Signed conditions require multi-instruction sequences
-  // For Select16 with signed conditions, we fall back to BNE as the first branch
-  // (the full sequence is generated in the pseudo expansion)
+  // For Select16 with signed conditions, we fall back to BNE as the first
+  // branch (the full sequence is generated in the pseudo expansion)
   case W65816CC::COND_SLT:
   case W65816CC::COND_SGE:
   case W65816CC::COND_SGT:
   case W65816CC::COND_SLE:
-    // Fallback - these should be handled specially by EmitInstrWithCustomInserter
+    // Fallback - these should be handled specially by
+    // EmitInstrWithCustomInserter
     return W65816::BNE;
   // Unsigned compound conditions require multi-instruction sequences
   case W65816CC::COND_UGT:
@@ -394,13 +405,13 @@ static bool evaluateICmp(ISD::CondCode CC, int64_t LHS, int64_t RHS) {
   case ISD::SETGE:
     return LHS >= RHS;
   case ISD::SETULT:
-    return (uint64_t)LHS < (uint64_t)RHS;
+    return static_cast<uint64_t>(LHS) < static_cast<uint64_t>(RHS);
   case ISD::SETULE:
-    return (uint64_t)LHS <= (uint64_t)RHS;
+    return static_cast<uint64_t>(LHS) <= static_cast<uint64_t>(RHS);
   case ISD::SETUGT:
-    return (uint64_t)LHS > (uint64_t)RHS;
+    return static_cast<uint64_t>(LHS) > static_cast<uint64_t>(RHS);
   case ISD::SETUGE:
-    return (uint64_t)LHS >= (uint64_t)RHS;
+    return static_cast<uint64_t>(LHS) >= static_cast<uint64_t>(RHS);
   default:
     llvm_unreachable("Unknown condition code");
   }
@@ -417,10 +428,12 @@ SDValue W65816TargetLowering::LowerSELECT_CC(SDValue Op,
 
   // Constant fold: if both comparison operands are constant, evaluate now
   // This avoids infinite loops in instruction selection when trying to
-  // materialize constants into registers for comparisons like `icmp eq i16 1, 1`
+  // materialize constants into registers for comparisons like `icmp eq i16 1,
+  // 1`
   if (auto *CLHS = dyn_cast<ConstantSDNode>(LHS)) {
     if (auto *CRHS = dyn_cast<ConstantSDNode>(RHS)) {
-      bool Result = evaluateICmp(CC, CLHS->getSExtValue(), CRHS->getSExtValue());
+      bool Result =
+          evaluateICmp(CC, CLHS->getSExtValue(), CRHS->getSExtValue());
       return Result ? TrueVal : FalseVal;
     }
   }
@@ -436,7 +449,8 @@ SDValue W65816TargetLowering::LowerSELECT_CC(SDValue Op,
 
   // Create the SELECT_CC node with the condition code
   SDVTList VTs = DAG.getVTList(Op.getValueType(), MVT::Glue);
-  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16), Cmp};
+  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16),
+                   Cmp};
 
   return DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
 }
@@ -451,7 +465,8 @@ SDValue W65816TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   // Constant fold: if both comparison operands are constant, evaluate now
   if (auto *CLHS = dyn_cast<ConstantSDNode>(LHS)) {
     if (auto *CRHS = dyn_cast<ConstantSDNode>(RHS)) {
-      bool Result = evaluateICmp(CC, CLHS->getSExtValue(), CRHS->getSExtValue());
+      bool Result =
+          evaluateICmp(CC, CLHS->getSExtValue(), CRHS->getSExtValue());
       return DAG.getConstant(Result ? 1 : 0, DL, ResultVT);
     }
   }
@@ -471,7 +486,8 @@ SDValue W65816TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   SDValue FalseVal = DAG.getConstant(0, DL, MVT::i16);
 
   SDVTList VTs = DAG.getVTList(MVT::i16, MVT::Glue);
-  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16), Cmp};
+  SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16),
+                   Cmp};
 
   SDValue Result = DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
 
@@ -537,9 +553,8 @@ SDValue W65816TargetLowering::LowerLoad(SDValue Op, SelectionDAG &DAG) const {
     // Load as i8 and zero-extend (booleans are always 0 or 1)
     // Create an i8 extending load instead
     SDValue NewLoad = DAG.getExtLoad(
-        ISD::ZEXTLOAD, DL, MVT::i16, Chain, Addr,
-        LD->getPointerInfo(), MVT::i8, LD->getAlign(),
-        LD->getMemOperand()->getFlags());
+        ISD::ZEXTLOAD, DL, MVT::i16, Chain, Addr, LD->getPointerInfo(), MVT::i8,
+        LD->getAlign(), LD->getMemOperand()->getFlags());
     // The result is already zero-extended to i16
     // AND with 1 to ensure it's a valid boolean (0 or 1)
     SDValue One = DAG.getConstant(1, DL, MVT::i16);
@@ -633,9 +648,8 @@ SDValue W65816TargetLowering::LowerStore(SDValue Op, SelectionDAG &DAG) const {
   return SDValue();
 }
 
-MachineBasicBlock *
-W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
-                                                  MachineBasicBlock *MBB) const {
+MachineBasicBlock *W65816TargetLowering::EmitInstrWithCustomInserter(
+    MachineInstr &MI, MachineBasicBlock *MBB) const {
   unsigned Opc = MI.getOpcode();
 
   if (Opc != W65816::Select16) {
@@ -657,13 +671,26 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   // the branch folder breaking the multi-instruction sequences
   unsigned CompoundSelectOpc = 0;
   switch (CondCode) {
-  case W65816CC::COND_SLT: CompoundSelectOpc = W65816::Select16_SLT; break;
-  case W65816CC::COND_SGE: CompoundSelectOpc = W65816::Select16_SGE; break;
-  case W65816CC::COND_SGT: CompoundSelectOpc = W65816::Select16_SGT; break;
-  case W65816CC::COND_SLE: CompoundSelectOpc = W65816::Select16_SLE; break;
-  case W65816CC::COND_UGT: CompoundSelectOpc = W65816::Select16_UGT; break;
-  case W65816CC::COND_ULE: CompoundSelectOpc = W65816::Select16_ULE; break;
-  default: break;
+  case W65816CC::COND_SLT:
+    CompoundSelectOpc = W65816::Select16_SLT;
+    break;
+  case W65816CC::COND_SGE:
+    CompoundSelectOpc = W65816::Select16_SGE;
+    break;
+  case W65816CC::COND_SGT:
+    CompoundSelectOpc = W65816::Select16_SGT;
+    break;
+  case W65816CC::COND_SLE:
+    CompoundSelectOpc = W65816::Select16_SLE;
+    break;
+  case W65816CC::COND_UGT:
+    CompoundSelectOpc = W65816::Select16_UGT;
+    break;
+  case W65816CC::COND_ULE:
+    CompoundSelectOpc = W65816::Select16_ULE;
+    break;
+  default:
+    break;
   }
 
   if (CompoundSelectOpc) {
@@ -734,9 +761,12 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     BuildMI(TrueMBB, DL, TII.get(W65816::TYA));
   } else if (TrueReg != W65816::A) {
     // Virtual register or imaginary register - need to load to A first
-    BuildMI(TrueMBB, DL, TII.get(TargetOpcode::COPY), W65816::A).addReg(TrueReg);
+    BuildMI(TrueMBB, DL, TII.get(TargetOpcode::COPY), W65816::A)
+        .addReg(TrueReg);
   }
-  BuildMI(TrueMBB, DL, TII.get(W65816::STA_dp)).addReg(W65816::A).addImm(SELECT_SCRATCH_DP);
+  BuildMI(TrueMBB, DL, TII.get(W65816::STA_dp))
+      .addReg(W65816::A)
+      .addImm(SELECT_SCRATCH_DP);
   BuildMI(TrueMBB, DL, TII.get(W65816::BRA)).addMBB(SinkMBB);
 
   // FalseMBB: Move FalseReg to A, store to scratch, fall through to SinkMBB
@@ -746,29 +776,35 @@ W65816TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   } else if (FalseReg == W65816::Y) {
     BuildMI(FalseMBB, DL, TII.get(W65816::TYA));
   } else if (FalseReg != W65816::A) {
-    BuildMI(FalseMBB, DL, TII.get(TargetOpcode::COPY), W65816::A).addReg(FalseReg);
+    BuildMI(FalseMBB, DL, TII.get(TargetOpcode::COPY), W65816::A)
+        .addReg(FalseReg);
   }
-  BuildMI(FalseMBB, DL, TII.get(W65816::STA_dp)).addReg(W65816::A).addImm(SELECT_SCRATCH_DP);
+  BuildMI(FalseMBB, DL, TII.get(W65816::STA_dp))
+      .addReg(W65816::A)
+      .addImm(SELECT_SCRATCH_DP);
   // No branch needed - falls through to SinkMBB
 
   // SinkMBB: Load result from scratch to A, then move to DstReg
   // Insert at the beginning of SinkMBB (before any spliced instructions)
   auto InsertPt = SinkMBB->begin();
-  BuildMI(*SinkMBB, InsertPt, DL, TII.get(W65816::LDA_dp), W65816::A).addImm(SELECT_SCRATCH_DP);
+  BuildMI(*SinkMBB, InsertPt, DL, TII.get(W65816::LDA_dp), W65816::A)
+      .addImm(SELECT_SCRATCH_DP);
   if (DstReg == W65816::X) {
     BuildMI(*SinkMBB, InsertPt, DL, TII.get(W65816::TAX));
   } else if (DstReg == W65816::Y) {
     BuildMI(*SinkMBB, InsertPt, DL, TII.get(W65816::TAY));
   } else if (DstReg != W65816::A) {
-    BuildMI(*SinkMBB, InsertPt, DL, TII.get(TargetOpcode::COPY), DstReg).addReg(W65816::A);
+    BuildMI(*SinkMBB, InsertPt, DL, TII.get(TargetOpcode::COPY), DstReg)
+        .addReg(W65816::A);
   }
 
   MI.eraseFromParent();
   return SinkMBB;
 }
 
-Register W65816TargetLowering::getRegisterByName(const char *RegName, LLT VT,
-                                                 const MachineFunction &MF) const {
+Register
+W65816TargetLowering::getRegisterByName(const char *RegName, LLT VT,
+                                        const MachineFunction &MF) const {
   Register Reg = StringSwitch<Register>(RegName)
                      .Case("a", W65816::A)
                      .Case("x", W65816::X)
@@ -780,7 +816,8 @@ Register W65816TargetLowering::getRegisterByName(const char *RegName, LLT VT,
   if (Reg)
     return Reg;
 
-  report_fatal_error(Twine("Invalid register name \"" + StringRef(RegName) + "\"."));
+  report_fatal_error(
+      Twine("invalid register name \"" + StringRef(RegName) + "\""));
 }
 
 std::pair<unsigned, const TargetRegisterClass *>
@@ -880,15 +917,16 @@ SDValue W65816TargetLowering::LowerFormalArguments(
       int FI = MFI.CreateFixedObject(ValVT.getSizeInBits() / 8,
                                      VA.getLocMemOffset(), true);
       SDValue FIN = DAG.getFrameIndex(FI, MVT::i16);
-      SDValue Load =
-          DAG.getLoad(ValVT, DL, Chain, FIN, MachinePointerInfo::getFixedStack(MF, FI));
+      SDValue Load = DAG.getLoad(ValVT, DL, Chain, FIN,
+                                 MachinePointerInfo::getFixedStack(MF, FI));
       InVals.push_back(Load);
     }
   }
 
   // For vararg functions, record the frame index where varargs start
   if (IsVarArg) {
-    W65816MachineFunctionInfo *FuncInfo = MF.getInfo<W65816MachineFunctionInfo>();
+    W65816MachineFunctionInfo *FuncInfo =
+        MF.getInfo<W65816MachineFunctionInfo>();
     // Varargs start after the last fixed argument on the stack
     unsigned Offset = CCInfo.getStackSize();
     int FI = MFI.CreateFixedObject(2, Offset, true);
@@ -898,11 +936,12 @@ SDValue W65816TargetLowering::LowerFormalArguments(
   return Chain;
 }
 
-SDValue W65816TargetLowering::LowerReturn(
-    SDValue Chain, CallingConv::ID CallConv, bool IsVarArg,
-    const SmallVectorImpl<ISD::OutputArg> &Outs,
-    const SmallVectorImpl<SDValue> &OutVals, const SDLoc &DL,
-    SelectionDAG &DAG) const {
+SDValue
+W65816TargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
+                                  bool IsVarArg,
+                                  const SmallVectorImpl<ISD::OutputArg> &Outs,
+                                  const SmallVectorImpl<SDValue> &OutVals,
+                                  const SDLoc &DL, SelectionDAG &DAG) const {
 
   MachineFunction &MF = DAG.getMachineFunction();
   const Function &F = MF.getFunction();
@@ -942,8 +981,9 @@ SDValue W65816TargetLowering::LowerReturn(
   return DAG.getNode(W65816ISD::RET_FLAG, DL, MVT::Other, RetOps);
 }
 
-SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
-                                        SmallVectorImpl<SDValue> &InVals) const {
+SDValue
+W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
+                                SmallVectorImpl<SDValue> &InVals) const {
   SelectionDAG &DAG = CLI.DAG;
   SDLoc &DL = CLI.DL;
   SmallVectorImpl<ISD::OutputArg> &Outs = CLI.Outs;
@@ -1017,8 +1057,7 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
       // allocated by CALLSEQ_START. Use positive offset since these are
       // at the top of the outgoing area (lowest addresses, closest to SP).
       int FI = MF.getFrameInfo().CreateFixedObject(
-          VA.getLocVT().getSizeInBits() / 8,
-          VA.getLocMemOffset(),
+          VA.getLocVT().getSizeInBits() / 8, VA.getLocMemOffset(),
           /*IsImmutable=*/false,
           /*isAliased=*/false);
       SDValue FIN = DAG.getFrameIndex(FI, MVT::i16);
@@ -1089,7 +1128,8 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   for (unsigned i = 0, e = RVLocs.size(); i != e; ++i) {
     CCValAssign &VA = RVLocs[i];
-    SDValue Val = DAG.getCopyFromReg(Chain, DL, VA.getLocReg(), VA.getLocVT(), Glue);
+    SDValue Val =
+        DAG.getCopyFromReg(Chain, DL, VA.getLocReg(), VA.getLocVT(), Glue);
     Chain = Val.getValue(1);
     Glue = Val.getValue(2);
     InVals.push_back(Val);
@@ -1111,7 +1151,7 @@ bool W65816TargetLowering::CanLowerReturn(
 }
 
 SDValue W65816TargetLowering::LowerVASTART(SDValue Op,
-                                            SelectionDAG &DAG) const {
+                                           SelectionDAG &DAG) const {
   MachineFunction &MF = DAG.getMachineFunction();
   W65816MachineFunctionInfo *FuncInfo = MF.getInfo<W65816MachineFunctionInfo>();
 
@@ -1121,7 +1161,8 @@ SDValue W65816TargetLowering::LowerVASTART(SDValue Op,
   EVT PtrVT = Ptr.getValueType();
 
   // Get the frame index of the first vararg argument
-  SDValue FrameIndex = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
+  SDValue FrameIndex =
+      DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
 
   // Get the source value for the store
   const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
@@ -1132,7 +1173,7 @@ SDValue W65816TargetLowering::LowerVASTART(SDValue Op,
 }
 
 SDValue W65816TargetLowering::LowerSIGN_EXTEND(SDValue Op,
-                                                SelectionDAG &DAG) const {
+                                               SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue Val = Op.getOperand(0);
   EVT SrcVT = Val.getValueType();
@@ -1146,8 +1187,8 @@ SDValue W65816TargetLowering::LowerSIGN_EXTEND(SDValue Op,
 
   // Sign extend i8 to i16 using: ((x & 0xFF) << 8) >> 8 (arithmetic shift)
   // First zero-extend, then shift-based sign extension
-  SDValue ZExt = LowerZERO_EXTEND(
-      DAG.getNode(ISD::ZERO_EXTEND, DL, MVT::i16, Val), DAG);
+  SDValue ZExt =
+      LowerZERO_EXTEND(DAG.getNode(ISD::ZERO_EXTEND, DL, MVT::i16, Val), DAG);
   // Shift left by 8 to put the i8 value in the high byte
   SDValue ShiftAmt = DAG.getConstant(8, DL, MVT::i16);
   SDValue Shifted = DAG.getNode(ISD::SHL, DL, MVT::i16, ZExt, ShiftAmt);
@@ -1157,7 +1198,7 @@ SDValue W65816TargetLowering::LowerSIGN_EXTEND(SDValue Op,
 }
 
 SDValue W65816TargetLowering::LowerZERO_EXTEND(SDValue Op,
-                                                SelectionDAG &DAG) const {
+                                               SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue Val = Op.getOperand(0);
   EVT SrcVT = Val.getValueType();
@@ -1173,19 +1214,15 @@ SDValue W65816TargetLowering::LowerZERO_EXTEND(SDValue Op,
   // Just AND with 0xFF to clear the high byte
   // The register allocator will coalesce the 8-bit and 16-bit registers
   return DAG.getNode(ISD::AND, DL, MVT::i16,
-                      DAG.getNode(ISD::BITCAST, DL, MVT::i16, Val),
-                      DAG.getConstant(0xFF, DL, MVT::i16));
+                     DAG.getNode(ISD::BITCAST, DL, MVT::i16, Val),
+                     DAG.getConstant(0xFF, DL, MVT::i16));
 }
 
 // Helper to promote i8 comparison operands to i16
 // Returns true if promotion was needed, false if operands are already i16
-static bool promoteCompareOperands(SelectionDAG &DAG,
-                                   const SDLoc &DL,
-                                   SDValue LHS,
-                                   SDValue RHS,
-                                   ISD::CondCode CC,
-                                   SDValue &PromotedLHS,
-                                   SDValue &PromotedRHS) {
+static bool promoteCompareOperands(SelectionDAG &DAG, const SDLoc &DL,
+                                   SDValue LHS, SDValue RHS, ISD::CondCode CC,
+                                   SDValue &PromotedLHS, SDValue &PromotedRHS) {
   // If operands are already i16, no promotion needed
   if (LHS.getValueType() == MVT::i16) {
     PromotedLHS = LHS;
@@ -1200,26 +1237,30 @@ static bool promoteCompareOperands(SelectionDAG &DAG,
     // Sign extend i8 to i16: shift left 8, then arithmetic shift right 8
     // This avoids creating SIGN_EXTEND nodes during type legalization
     SDValue Eight = DAG.getConstant(8, DL, MVT::i16);
-    PromotedLHS = DAG.getNode(ISD::SHL, DL, MVT::i16,
-                               DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, LHS), Eight);
+    PromotedLHS =
+        DAG.getNode(ISD::SHL, DL, MVT::i16,
+                    DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, LHS), Eight);
     PromotedLHS = DAG.getNode(ISD::SRA, DL, MVT::i16, PromotedLHS, Eight);
-    PromotedRHS = DAG.getNode(ISD::SHL, DL, MVT::i16,
-                               DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, RHS), Eight);
+    PromotedRHS =
+        DAG.getNode(ISD::SHL, DL, MVT::i16,
+                    DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, RHS), Eight);
     PromotedRHS = DAG.getNode(ISD::SRA, DL, MVT::i16, PromotedRHS, Eight);
   } else {
     // Zero extend: AND with 0xFF
     SDValue Mask = DAG.getConstant(0xFF, DL, MVT::i16);
-    PromotedLHS = DAG.getNode(ISD::AND, DL, MVT::i16,
-                               DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, LHS), Mask);
-    PromotedRHS = DAG.getNode(ISD::AND, DL, MVT::i16,
-                               DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, RHS), Mask);
+    PromotedLHS =
+        DAG.getNode(ISD::AND, DL, MVT::i16,
+                    DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, LHS), Mask);
+    PromotedRHS =
+        DAG.getNode(ISD::AND, DL, MVT::i16,
+                    DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i16, RHS), Mask);
   }
   return true;
 }
 
 void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
-                                               SmallVectorImpl<SDValue> &Results,
-                                               SelectionDAG &DAG) const {
+                                              SmallVectorImpl<SDValue> &Results,
+                                              SelectionDAG &DAG) const {
   SDLoc DL(N);
 
   switch (N->getOpcode()) {
@@ -1238,7 +1279,8 @@ void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
     promoteCompareOperands(DAG, DL, LHS, RHS, CC, PromotedLHS, PromotedRHS);
 
     // Create a comparison node that sets flags (using promoted i16 operands)
-    SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
+    SDValue Cmp =
+        DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
 
     // Get the W65816 condition code for this ISD condition
     W65816CC::CondCode W65CC = getCondCodeForISD(CC);
@@ -1248,7 +1290,8 @@ void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
     SDValue FalseVal = DAG.getConstant(0, DL, MVT::i16);
 
     SDVTList VTs = DAG.getVTList(MVT::i16, MVT::Glue);
-    SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16), Cmp};
+    SDValue Ops[] = {TrueVal, FalseVal, DAG.getConstant(W65CC, DL, MVT::i16),
+                     Cmp};
 
     SDValue Result = DAG.getNode(W65816ISD::SELECT_CC, DL, VTs, Ops);
 
@@ -1275,11 +1318,11 @@ void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
     promoteCompareOperands(DAG, DL, LHS, RHS, CC, PromotedLHS, PromotedRHS);
 
     // Create comparison and branch using our custom nodes
-    SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
+    SDValue Cmp =
+        DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
     W65816CC::CondCode W65CC = getCondCodeForISD(CC);
-    SDValue BrCond = DAG.getNode(W65816ISD::BRCOND, DL, MVT::Other,
-                                  Chain, Dest,
-                                  DAG.getConstant(W65CC, DL, MVT::i16), Cmp);
+    SDValue BrCond = DAG.getNode(W65816ISD::BRCOND, DL, MVT::Other, Chain, Dest,
+                                 DAG.getConstant(W65CC, DL, MVT::i16), Cmp);
     Results.push_back(BrCond);
     return;
   }
@@ -1299,7 +1342,8 @@ void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
     promoteCompareOperands(DAG, DL, LHS, RHS, CC, PromotedLHS, PromotedRHS);
 
     // Create comparison and select using our custom nodes
-    SDValue Cmp = DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
+    SDValue Cmp =
+        DAG.getNode(W65816ISD::CMP, DL, MVT::Glue, PromotedLHS, PromotedRHS);
     W65816CC::CondCode W65CC = getCondCodeForISD(CC);
 
     SDVTList VTs = DAG.getVTList(N->getValueType(0), MVT::Glue);
@@ -1321,9 +1365,8 @@ void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
   }
 }
 
-SDValue
-W65816TargetLowering::PerformDAGCombine(SDNode *N,
-                                        DAGCombinerInfo &DCI) const {
+SDValue W65816TargetLowering::PerformDAGCombine(SDNode *N,
+                                                DAGCombinerInfo &DCI) const {
   (void)DCI; // May be used in future combines
   (void)N;   // May be used in future combines
 

@@ -12,9 +12,9 @@
 
 #include "W65816Subtarget.h"
 
+#include "MCTargetDesc/W65816MCTargetDesc.h"
 #include "W65816.h"
 #include "W65816TargetMachine.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
 
 #include "llvm/MC/TargetRegistry.h"
 
@@ -29,8 +29,8 @@ using namespace llvm;
 W65816Subtarget::W65816Subtarget(const Triple &TT, const std::string &CPU,
                                  const std::string &FS,
                                  const W65816TargetMachine &TM)
-    : W65816GenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS),
-      InstrInfo(*this), FrameLowering(), TLInfo(TM, *this) {
+    : W65816GenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS), InstrInfo(*this),
+      FrameLowering(), TLInfo(TM, *this) {
 
   // Parse features string
   ParseSubtargetFeatures(CPU, /*TuneCPU*/ CPU, FS);

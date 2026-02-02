@@ -11,9 +11,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "W65816MCTargetDesc.h"
+#include "TargetInfo/W65816TargetInfo.h"
 #include "W65816InstPrinter.h"
 #include "W65816MCAsmInfo.h"
-#include "TargetInfo/W65816TargetInfo.h"
 
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCCodeEmitter.h"
@@ -48,9 +48,8 @@ static MCRegisterInfo *createW65816MCRegisterInfo(const Triple &TT) {
   return X;
 }
 
-static MCSubtargetInfo *createW65816MCSubtargetInfo(const Triple &TT,
-                                                    StringRef CPU,
-                                                    StringRef FS) {
+static MCSubtargetInfo *
+createW65816MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
   return createW65816MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
 }
 

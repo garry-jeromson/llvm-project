@@ -10,11 +10,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MCTargetDesc/W65816MCTargetDesc.h"
 #include "W65816.h"
 #include "W65816ISelLowering.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
 
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -65,9 +65,8 @@ static bool isFarGlobal(const GlobalValue *GV) {
     return false;
 
   // Check for common far/ROM section names
-  return Section == ".fardata" || Section == ".far" ||
-         Section == ".romdata" || Section == ".rodata" ||
-         Section.starts_with(".bank");
+  return Section == ".fardata" || Section == ".far" || Section == ".romdata" ||
+         Section == ".rodata" || Section.starts_with(".bank");
 }
 
 class W65816DAGToDAGISel : public SelectionDAGISel {
@@ -126,10 +125,10 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
   default:
     break;
 
-  // Note: CopyToReg is handled by default selection. The MOV16ri pattern
-  // will be selected for immediate loads, then COPY instructions will copy
-  // to physical registers. This ensures proper liveness for call argument
-  // setup. The MOV16ri pseudo is later expanded to LDA/LDX/LDY_imm16.
+    // Note: CopyToReg is handled by default selection. The MOV16ri pattern
+    // will be selected for immediate loads, then COPY instructions will copy
+    // to physical registers. This ensures proper liveness for call argument
+    // setup. The MOV16ri pseudo is later expanded to LDA/LDX/LDY_imm16.
 
   case ISD::FrameIndex: {
     // When FrameIndex is used as a value (e.g., passed to a call as a pointer),
@@ -139,8 +138,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
     // Use LEA_fi pseudo to load the effective address of a stack slot.
     // Frame lowering will convert this to actual SP + offset computation.
-    MachineSDNode *LEA = CurDAG->getMachineNode(
-        W65816::LEA_fi, DL, MVT::i16, TFI);
+    MachineSDNode *LEA =
+        CurDAG->getMachineNode(W65816::LEA_fi, DL, MVT::i16, TFI);
     ReplaceNode(N, LEA);
     return;
   }
@@ -163,8 +162,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     }
 
     if (ExternalSymbolSDNode *ES = dyn_cast<ExternalSymbolSDNode>(Inner)) {
-      SDValue TargetSym = CurDAG->getTargetExternalSymbol(
-          ES->getSymbol(), MVT::i16);
+      SDValue TargetSym =
+          CurDAG->getTargetExternalSymbol(ES->getSymbol(), MVT::i16);
       MachineSDNode *Load =
           CurDAG->getMachineNode(W65816::MOV16ri, DL, MVT::i16, TargetSym);
       ReplaceNode(N, Load);
@@ -191,7 +190,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           // Store zero to absolute address
           if (Addr.getOpcode() == W65816ISD::WRAPPER) {
             SDValue Inner = Addr.getOperand(0);
-            if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+            if (GlobalAddressSDNode *GA =
+                    dyn_cast<GlobalAddressSDNode>(Inner)) {
               if (isDirectPageGlobal(GA->getGlobal())) {
                 // Use direct page STZ (2-byte instruction)
                 SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
@@ -239,7 +239,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
                 int64_t Val = CN->getSExtValue();
                 if (Val == 1) {
                   LoadVal = LHS;
-                  MemOpc = (Value.getOpcode() == ISD::ADD) ? W65816::INC_abs : W65816::DEC_abs;
+                  MemOpc = (Value.getOpcode() == ISD::ADD) ? W65816::INC_abs
+                                                           : W65816::DEC_abs;
                 } else if (Val == -1 && Value.getOpcode() == ISD::ADD) {
                   // add x, -1 is the same as sub x, 1 (DEC)
                   LoadVal = LHS;
@@ -262,19 +263,22 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
             }
           }
           // Check for shl/lshr by 1 (ASL/LSR)
-          else if (Value.getOpcode() == ISD::SHL || Value.getOpcode() == ISD::SRL) {
+          else if (Value.getOpcode() == ISD::SHL ||
+                   Value.getOpcode() == ISD::SRL) {
             SDValue Src = Value.getOperand(0);
             SDValue Amt = Value.getOperand(1);
 
             if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Amt)) {
               if (CN->getZExtValue() == 1 && Src.getOpcode() == ISD::LOAD) {
                 LoadVal = Src;
-                MemOpc = (Value.getOpcode() == ISD::SHL) ? W65816::ASL_abs : W65816::LSR_abs;
+                MemOpc = (Value.getOpcode() == ISD::SHL) ? W65816::ASL_abs
+                                                         : W65816::LSR_abs;
               }
             }
           }
 
-          // If we found a valid pattern, check that load is from the same address
+          // If we found a valid pattern, check that load is from the same
+          // address
           if (MemOpc != 0 && LoadVal.getNode()) {
             LoadSDNode *LD = cast<LoadSDNode>(LoadVal.getNode());
             SDValue LoadAddr = LD->getBasePtr();
@@ -282,7 +286,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
             // Check if load address matches store address (same global)
             if (LoadAddr.getOpcode() == W65816ISD::WRAPPER) {
               SDValue LoadInner = LoadAddr.getOperand(0);
-              if (GlobalAddressSDNode *LoadGA = dyn_cast<GlobalAddressSDNode>(LoadInner)) {
+              if (GlobalAddressSDNode *LoadGA =
+                      dyn_cast<GlobalAddressSDNode>(LoadInner)) {
                 if (LoadGA->getGlobal() == GA->getGlobal() &&
                     LoadGA->getOffset() == GA->getOffset()) {
                   // Check that load has only one use (the operation) AND
@@ -292,10 +297,18 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
                     // Use direct page variant if applicable
                     if (isDirectPageGlobal(GA->getGlobal())) {
                       switch (MemOpc) {
-                        case W65816::INC_abs: MemOpc = W65816::INC_dp; break;
-                        case W65816::DEC_abs: MemOpc = W65816::DEC_dp; break;
-                        case W65816::ASL_abs: MemOpc = W65816::ASL_dp; break;
-                        case W65816::LSR_abs: MemOpc = W65816::LSR_dp; break;
+                      case W65816::INC_abs:
+                        MemOpc = W65816::INC_dp;
+                        break;
+                      case W65816::DEC_abs:
+                        MemOpc = W65816::DEC_dp;
+                        break;
+                      case W65816::ASL_abs:
+                        MemOpc = W65816::ASL_dp;
+                        break;
+                      case W65816::LSR_abs:
+                        MemOpc = W65816::LSR_dp;
+                        break;
                       }
                       SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
                           GA->getGlobal(), DL, MVT::i8, GA->getOffset());
@@ -400,8 +413,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
                 SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
                     GA->getGlobal(), DL, MVT::i32, Offset);
                 SDValue Ops[] = {Value, TargetAddr, Chain};
-                MachineSDNode *Store =
-                    CurDAG->getMachineNode(W65816::STA_long, DL, MVT::Other, Ops);
+                MachineSDNode *Store = CurDAG->getMachineNode(
+                    W65816::STA_long, DL, MVT::Other, Ops);
                 CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
                 ReplaceNode(N, Store);
                 return;
@@ -423,8 +436,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
               SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
                   GA->getGlobal(), DL, MVT::i32, GA->getOffset());
               SDValue Ops[] = {Value, TargetAddr, Index, Chain};
-              MachineSDNode *Store =
-                  CurDAG->getMachineNode(W65816::STAindexedLongX, DL, MVT::Other, Ops);
+              MachineSDNode *Store = CurDAG->getMachineNode(
+                  W65816::STAindexedLongX, DL, MVT::Other, Ops);
               CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
               ReplaceNode(N, Store);
               return;
@@ -438,8 +451,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
             if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Value)) {
               if (CN->isZero()) {
                 SDValue Ops[] = {TargetAddr, Index, Chain};
-                MachineSDNode *Store =
-                    CurDAG->getMachineNode(W65816::STZindexedX, DL, MVT::Other, Ops);
+                MachineSDNode *Store = CurDAG->getMachineNode(
+                    W65816::STZindexedX, DL, MVT::Other, Ops);
                 CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
                 ReplaceNode(N, Store);
                 return;
@@ -448,8 +461,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
 
             // Emit STAindexedX pseudo: (val, addr, idx)
             SDValue Ops[] = {Value, TargetAddr, Index, Chain};
-            MachineSDNode *Store =
-                CurDAG->getMachineNode(W65816::STAindexedX, DL, MVT::Other, Ops);
+            MachineSDNode *Store = CurDAG->getMachineNode(W65816::STAindexedX,
+                                                          DL, MVT::Other, Ops);
 
             CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
             ReplaceNode(N, Store);
@@ -458,9 +471,9 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
-      // Check for DP indirect indexed Y store: (store val, (add (load (wrapper GA_dp)), offset))
-      // This is ptr[i] = val where ptr is stored in direct page.
-      // We can use STA ($dp),Y instead of stack-relative indirect.
+      // Check for DP indirect indexed Y store: (store val, (add (load (wrapper
+      // GA_dp)), offset)) This is ptr[i] = val where ptr is stored in direct
+      // page. We can use STA ($dp),Y instead of stack-relative indirect.
       if (Addr.getOpcode() == ISD::ADD) {
         SDValue LHS = Addr.getOperand(0);
         SDValue RHS = Addr.getOperand(1);
@@ -482,7 +495,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
 
           if (PtrAddr.getOpcode() == W65816ISD::WRAPPER) {
             SDValue Inner = PtrAddr.getOperand(0);
-            if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+            if (GlobalAddressSDNode *GA =
+                    dyn_cast<GlobalAddressSDNode>(Inner)) {
               if (isDirectPageGlobal(GA->getGlobal())) {
                 // Use DP indirect indexed Y: STA ($dp),Y
                 SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
@@ -491,8 +505,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
                 // Use STAindexedDPY pseudo which handles moving offset to Y
                 SDValue PtrChain = PtrLoad->getChain();
                 SDValue Ops[] = {Value, TargetAddr, Offset, PtrChain};
-                MachineSDNode *Store =
-                    CurDAG->getMachineNode(W65816::STAindexedDPY, DL, MVT::Other, Ops);
+                MachineSDNode *Store = CurDAG->getMachineNode(
+                    W65816::STAindexedDPY, DL, MVT::Other, Ops);
 
                 CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
                 ReplaceNode(N, Store);
@@ -503,9 +517,9 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
-      // Check for frame index + constant offset: (store val, (add frameindex, const))
-      // This is the common pattern for local array/struct access: arr[i] = val
-      // Use simple STA_sr with combined offset
+      // Check for frame index + constant offset: (store val, (add frameindex,
+      // const)) This is the common pattern for local array/struct access:
+      // arr[i] = val Use simple STA_sr with combined offset
       if (Addr.getOpcode() == ISD::ADD) {
         SDValue LHS = Addr.getOperand(0);
         SDValue RHS = Addr.getOperand(1);
@@ -543,9 +557,10 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
-      // Check for frame index + variable offset: (store val, (add frameindex, reg))
-      // This handles arr[i] = val where arr is on stack and i is a variable
-      // We need to compute the frame address first, then use indexed indirect
+      // Check for frame index + variable offset: (store val, (add frameindex,
+      // reg)) This handles arr[i] = val where arr is on stack and i is a
+      // variable We need to compute the frame address first, then use indexed
+      // indirect
       if (Addr.getOpcode() == ISD::ADD) {
         SDValue LHS = Addr.getOperand(0);
         SDValue RHS = Addr.getOperand(1);
@@ -566,10 +581,12 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           // First compute the frame address using LEA_fi
           int FI = FIN->getIndex();
           SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
-          MachineSDNode *LEA = CurDAG->getMachineNode(W65816::LEA_fi, DL, MVT::i16, TFI);
+          MachineSDNode *LEA =
+              CurDAG->getMachineNode(W65816::LEA_fi, DL, MVT::i16, TFI);
           SDValue BaseAddr = SDValue(LEA, 0);
 
-          // Now use STAindirectIdx with the computed address and variable offset
+          // Now use STAindirectIdx with the computed address and variable
+          // offset
           MachineFunction &MF = CurDAG->getMachineFunction();
           MachineFrameInfo &MFI = MF.getFrameInfo();
 
@@ -577,8 +594,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           SDValue StackSlot = CurDAG->getTargetFrameIndex(StackFI, MVT::i16);
 
           SDValue Ops[] = {Value, StackSlot, BaseAddr, VarOffset, Chain};
-          MachineSDNode *Store =
-              CurDAG->getMachineNode(W65816::STAindirectIdx, DL, MVT::Other, Ops);
+          MachineSDNode *Store = CurDAG->getMachineNode(W65816::STAindirectIdx,
+                                                        DL, MVT::Other, Ops);
 
           CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
           ReplaceNode(N, Store);
@@ -599,7 +616,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         bool LHSIsFrameIndex = isa<FrameIndexSDNode>(LHS);
         bool RHSIsFrameIndex = isa<FrameIndexSDNode>(RHS);
 
-        if (!LHSIsWrapper && !RHSIsWrapper && !LHSIsFrameIndex && !RHSIsFrameIndex) {
+        if (!LHSIsWrapper && !RHSIsWrapper && !LHSIsFrameIndex &&
+            !RHSIsFrameIndex) {
           // This is indexed pointer store: ptr[i] = val
           MachineFunction &MF = CurDAG->getMachineFunction();
           MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -609,8 +627,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
 
           // Use STAindirectIdx pseudo
           SDValue Ops[] = {Value, StackSlot, LHS, RHS, Chain};
-          MachineSDNode *Store =
-              CurDAG->getMachineNode(W65816::STAindirectIdx, DL, MVT::Other, Ops);
+          MachineSDNode *Store = CurDAG->getMachineNode(W65816::STAindirectIdx,
+                                                        DL, MVT::Other, Ops);
 
           CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
           ReplaceNode(N, Store);
@@ -637,8 +655,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
               // Chain through the pointer load
               SDValue PtrChain = PtrLoad->getChain();
               SDValue Ops[] = {Value, TargetAddr, PtrChain};
-              MachineSDNode *Store =
-                  CurDAG->getMachineNode(W65816::STA_dpInd, DL, MVT::Other, Ops);
+              MachineSDNode *Store = CurDAG->getMachineNode(
+                  W65816::STA_dpInd, DL, MVT::Other, Ops);
 
               CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
               ReplaceNode(N, Store);
@@ -649,8 +667,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       }
 
       // Check for store to constant address (from inttoptr)
-      // This handles volatile stores like: store volatile i8 %v, ptr inttoptr (i16 8469 to ptr)
-      // Use direct absolute addressing instead of indirect
+      // This handles volatile stores like: store volatile i8 %v, ptr inttoptr
+      // (i16 8469 to ptr) Use direct absolute addressing instead of indirect
       if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr)) {
         uint64_t ConstAddr = CN->getZExtValue() & 0xFFFF;
         SDValue TargetAddr = CurDAG->getTargetConstant(ConstAddr, DL, MVT::i16);
@@ -663,8 +681,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       }
 
       // Check for store through a pointer in a register (e.g., *ptr = val)
-      // If Addr is not a frame index, wrapper, add pattern, or constant, it's a register
-      // We need to use stack-relative indirect addressing:
+      // If Addr is not a frame index, wrapper, add pattern, or constant, it's a
+      // register We need to use stack-relative indirect addressing:
       // 1. Store the pointer to a stack slot
       // 2. Use STA (offset,S),Y with Y=0 to store through it
       if (!isa<FrameIndexSDNode>(Addr) &&
@@ -678,7 +696,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         int FI = MFI.CreateStackObject(2, Align(2), false);
         SDValue StackSlot = CurDAG->getTargetFrameIndex(FI, MVT::i16);
 
-        // Use STAindirect pseudo which will be expanded after register allocation
+        // Use STAindirect pseudo which will be expanded after register
+        // allocation
         SDValue ZeroIdx = CurDAG->getTargetConstant(0, DL, MVT::i16);
         SDValue Ops[] = {Value, StackSlot, Addr, ZeroIdx, Chain};
         MachineSDNode *Store =
@@ -731,8 +750,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
             SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
                 GA->getGlobal(), DL, MVT::i16, GA->getOffset());
             SDValue Ops[] = {Value, TargetAddr, Index, Chain};
-            MachineSDNode *Store =
-                CurDAG->getMachineNode(W65816::STA8indexedX, DL, MVT::Other, Ops);
+            MachineSDNode *Store = CurDAG->getMachineNode(W65816::STA8indexedX,
+                                                          DL, MVT::Other, Ops);
             CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
             ReplaceNode(N, Store);
             return;
@@ -761,8 +780,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
 
           // Use STA8indirectIdx pseudo
           SDValue Ops[] = {Value, StackSlot, LHS, RHS, Chain};
-          MachineSDNode *Store =
-              CurDAG->getMachineNode(W65816::STA8indirectIdx, DL, MVT::Other, Ops);
+          MachineSDNode *Store = CurDAG->getMachineNode(W65816::STA8indirectIdx,
+                                                        DL, MVT::Other, Ops);
 
           CurDAG->setNodeMemRefs(Store, {ST->getMemOperand()});
           ReplaceNode(N, Store);
@@ -771,7 +790,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       }
 
       // Check for 8-bit store to constant address (from inttoptr)
-      // This handles volatile stores like: store volatile i8 %v, ptr inttoptr (i16 8469 to ptr)
+      // This handles volatile stores like: store volatile i8 %v, ptr inttoptr
+      // (i16 8469 to ptr)
       if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr)) {
         uint64_t ConstAddr = CN->getZExtValue() & 0xFFFF;
         SDValue TargetAddr = CurDAG->getTargetConstant(ConstAddr, DL, MVT::i16);
@@ -787,11 +807,11 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       // This handles cases like *(u8*)ptr = val where ptr is in a register
       if (!isa<FrameIndexSDNode>(Addr) &&
           Addr.getOpcode() != W65816ISD::WRAPPER &&
-          Addr.getOpcode() != ISD::ADD &&
-          !isa<GlobalAddressSDNode>(Addr) &&
+          Addr.getOpcode() != ISD::ADD && !isa<GlobalAddressSDNode>(Addr) &&
           !isa<ConstantSDNode>(Addr)) {
 
-        // The address is in a register - use stack-relative indirect with mode switch
+        // The address is in a register - use stack-relative indirect with mode
+        // switch
         MachineFunction &MF = CurDAG->getMachineFunction();
         MachineFrameInfo &MFI = MF.getFrameInfo();
 
@@ -826,7 +846,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     SDValue Addr = LD->getBasePtr();
 
     // Only handle simple loads of i16
-    if (LD->getMemoryVT() == MVT::i16 && LD->getExtensionType() == ISD::NON_EXTLOAD) {
+    if (LD->getMemoryVT() == MVT::i16 &&
+        LD->getExtensionType() == ISD::NON_EXTLOAD) {
       // Check for frame index - use stack-relative addressing
       if (FrameIndexSDNode *FIN = dyn_cast<FrameIndexSDNode>(Addr)) {
         int FI = FIN->getIndex();
@@ -958,9 +979,9 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
-      // Check for DP indirect indexed Y: (load (add (load (wrapper GA_dp)), offset))
-      // This is ptr[i] where ptr is stored in direct page.
-      // We can use LDA ($dp),Y instead of stack-relative indirect.
+      // Check for DP indirect indexed Y: (load (add (load (wrapper GA_dp)),
+      // offset)) This is ptr[i] where ptr is stored in direct page. We can use
+      // LDA ($dp),Y instead of stack-relative indirect.
       if (Addr.getOpcode() == ISD::ADD) {
         SDValue LHS = Addr.getOperand(0);
         SDValue RHS = Addr.getOperand(1);
@@ -982,7 +1003,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
 
           if (PtrAddr.getOpcode() == W65816ISD::WRAPPER) {
             SDValue Inner = PtrAddr.getOperand(0);
-            if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
+            if (GlobalAddressSDNode *GA =
+                    dyn_cast<GlobalAddressSDNode>(Inner)) {
               if (isDirectPageGlobal(GA->getGlobal())) {
                 // Use DP indirect indexed Y: LDA ($dp),Y
                 SDValue TargetAddr = CurDAG->getTargetGlobalAddress(
@@ -1065,10 +1087,12 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           // First compute the frame address using LEA_fi
           int FI = FIN->getIndex();
           SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
-          MachineSDNode *LEA = CurDAG->getMachineNode(W65816::LEA_fi, DL, MVT::i16, TFI);
+          MachineSDNode *LEA =
+              CurDAG->getMachineNode(W65816::LEA_fi, DL, MVT::i16, TFI);
           SDValue BaseAddr = SDValue(LEA, 0);
 
-          // Now use LDAindirectIdx with the computed address and variable offset
+          // Now use LDAindirectIdx with the computed address and variable
+          // offset
           MachineFunction &MF = CurDAG->getMachineFunction();
           MachineFrameInfo &MFI = MF.getFrameInfo();
 
@@ -1087,8 +1111,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       }
 
       // Check for indexed pointer access: (load (add ptr, offset))
-      // where ptr is a register and offset is computed (e.g., i*2 for i16 arrays)
-      // This handles ptr[i] where ptr is in a register
+      // where ptr is a register and offset is computed (e.g., i*2 for i16
+      // arrays) This handles ptr[i] where ptr is in a register
       if (Addr.getOpcode() == ISD::ADD) {
         SDValue LHS = Addr.getOperand(0);
         SDValue RHS = Addr.getOperand(1);
@@ -1100,7 +1124,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         bool LHSIsFrameIndex = isa<FrameIndexSDNode>(LHS);
         bool RHSIsFrameIndex = isa<FrameIndexSDNode>(RHS);
 
-        if (!LHSIsWrapper && !RHSIsWrapper && !LHSIsFrameIndex && !RHSIsFrameIndex) {
+        if (!LHSIsWrapper && !RHSIsWrapper && !LHSIsFrameIndex &&
+            !RHSIsFrameIndex) {
           // This is indexed pointer access: ptr[i]
           // LHS is typically the base pointer, RHS is the byte offset
           // We'll use stack-relative indirect indexed addressing:
@@ -1114,8 +1139,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           int FI = MFI.CreateStackObject(2, Align(2), false);
           SDValue StackSlot = CurDAG->getTargetFrameIndex(FI, MVT::i16);
 
-          // Use LDAindirectIdx pseudo: stores LHS (ptr) to stack, puts RHS (offset) in Y
-          // Then uses LDA (offset,S),Y
+          // Use LDAindirectIdx pseudo: stores LHS (ptr) to stack, puts RHS
+          // (offset) in Y Then uses LDA (offset,S),Y
           SDValue Ops[] = {StackSlot, LHS, RHS, Chain};
           SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
           MachineSDNode *Load =
@@ -1165,8 +1190,7 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       // 2. Use LDA (offset,S),Y with Y=0 to load through it
       if (!isa<FrameIndexSDNode>(Addr) &&
           Addr.getOpcode() != W65816ISD::WRAPPER &&
-          Addr.getOpcode() != ISD::ADD &&
-          !isa<GlobalAddressSDNode>(Addr)) {
+          Addr.getOpcode() != ISD::ADD && !isa<GlobalAddressSDNode>(Addr)) {
         // The address is in a register - use stack-relative indirect
 
         MachineFunction &MF = CurDAG->getMachineFunction();
@@ -1184,7 +1208,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
 
         // For simplicity, we'll use a pseudo instruction that handles
         // the entire sequence. But first, let's try the direct approach:
-        // Emit: copy ptr to A (if not already), STA to stack, LDY #0, LDA (fi,S),Y
+        // Emit: copy ptr to A (if not already), STA to stack, LDY #0, LDA
+        // (fi,S),Y
 
         // Actually, the cleanest approach is to use a pseudo instruction
         // that we expand later. Let's use LDAindirect with frame index.
@@ -1288,11 +1313,13 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
         }
       }
 
-      // Check for constant (immediate) address: load from inttoptr (i16 N to ptr)
-      // This handles volatile hardware register access like *(volatile u8*)0x420C
+      // Check for constant (immediate) address: load from inttoptr (i16 N to
+      // ptr) This handles volatile hardware register access like *(volatile
+      // u8*)0x420C
       if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr)) {
         // Use LDA8_abs with the constant address
-        SDValue TargetAddr = CurDAG->getTargetConstant(CN->getZExtValue(), DL, MVT::i16);
+        SDValue TargetAddr =
+            CurDAG->getTargetConstant(CN->getZExtValue(), DL, MVT::i16);
         SDValue Ops[] = {TargetAddr, Chain};
         SDVTList VTs = CurDAG->getVTList(MVT::i16, MVT::Other);
         MachineSDNode *Load =
@@ -1306,11 +1333,11 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
       // This handles cases like *(u8*)ptr where ptr is in a register
       if (!isa<FrameIndexSDNode>(Addr) &&
           Addr.getOpcode() != W65816ISD::WRAPPER &&
-          Addr.getOpcode() != ISD::ADD &&
-          !isa<GlobalAddressSDNode>(Addr) &&
+          Addr.getOpcode() != ISD::ADD && !isa<GlobalAddressSDNode>(Addr) &&
           !isa<ConstantSDNode>(Addr)) {
 
-        // The address is in a register - use stack-relative indirect with mode switch
+        // The address is in a register - use stack-relative indirect with mode
+        // switch
         MachineFunction &MF = CurDAG->getMachineFunction();
         MachineFrameInfo &MFI = MF.getFrameInfo();
 
@@ -1377,11 +1404,11 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     }
 
     // Only handle if both operands are 8-bit extending loads with single use
-    // If loads have multiple uses, we can't bypass them - fall through to default
-    // Also check that the load chain outputs have no users - if they do, bypassing
-    // the loads would leave dangling chain references causing scheduling issues.
-    if (LHSLoad && RHSLoad &&
-        LHS.hasOneUse() && RHS.hasOneUse() &&
+    // If loads have multiple uses, we can't bypass them - fall through to
+    // default Also check that the load chain outputs have no users - if they
+    // do, bypassing the loads would leave dangling chain references causing
+    // scheduling issues.
+    if (LHSLoad && RHSLoad && LHS.hasOneUse() && RHS.hasOneUse() &&
         !LHSLoad->hasAnyUseOfValue(1) && !RHSLoad->hasAnyUseOfValue(1)) {
       SDValue LHSAddr = LHSLoad->getBasePtr();
       SDValue RHSAddr = RHSLoad->getBasePtr();
@@ -1404,12 +1431,23 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           // Determine which pseudo instruction to use for the binop
           unsigned BinopOpc;
           switch (Opcode) {
-          case ISD::AND: BinopOpc = W65816::AND8_abs; break;
-          case ISD::OR:  BinopOpc = W65816::ORA8_abs; break;
-          case ISD::XOR: BinopOpc = W65816::EOR8_abs; break;
-          case ISD::ADD: BinopOpc = W65816::ADC8_abs; break;
-          case ISD::SUB: BinopOpc = W65816::SBC8_abs; break;
-          default: llvm_unreachable("Unexpected opcode");
+          case ISD::AND:
+            BinopOpc = W65816::AND8_abs;
+            break;
+          case ISD::OR:
+            BinopOpc = W65816::ORA8_abs;
+            break;
+          case ISD::XOR:
+            BinopOpc = W65816::EOR8_abs;
+            break;
+          case ISD::ADD:
+            BinopOpc = W65816::ADC8_abs;
+            break;
+          case ISD::SUB:
+            BinopOpc = W65816::SBC8_abs;
+            break;
+          default:
+            llvm_unreachable("Unexpected opcode");
           }
 
           // First load LHS with LDA8_abs
@@ -1429,7 +1467,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
           SDValue BinopChain = SDValue(LoadNode, 1);
           // The binop takes: A (implicit from load), addr, chain
           // Result is in A (i16, zero-extended)
-          SDValue BinopOps[] = {SDValue(LoadNode, 0), RHSTargetAddr, BinopChain};
+          SDValue BinopOps[] = {SDValue(LoadNode, 0), RHSTargetAddr,
+                                BinopChain};
           SDVTList BinopVTs = CurDAG->getVTList(MVT::i16, MVT::Other);
           MachineSDNode *BinopNode =
               CurDAG->getMachineNode(BinopOpc, DL, BinopVTs, BinopOps);
@@ -1443,8 +1482,9 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     break;
   }
 
-  // Note: W65816ISD::CALL and W65816ISD::FAR_CALL are handled by TableGen patterns
-  // The SDNPVariadic flag ensures that argument register operands become implicit uses
+    // Note: W65816ISD::CALL and W65816ISD::FAR_CALL are handled by TableGen
+    // patterns The SDNPVariadic flag ensures that argument register operands
+    // become implicit uses
   }
 
   // Select the default instruction
@@ -1486,7 +1526,7 @@ bool W65816DAGToDAGISel::SelectAddr(SDValue Addr, SDValue &Base) {
       if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
         // Create a new TargetGlobalAddress with the combined offset
         Base = CurDAG->getTargetGlobalAddress(GA->getGlobal(), DL, MVT::i16,
-                                               GA->getOffset() + Offset);
+                                              GA->getOffset() + Offset);
         return true;
       }
     }
@@ -1498,7 +1538,7 @@ bool W65816DAGToDAGISel::SelectAddr(SDValue Addr, SDValue &Base) {
 
       if (GlobalAddressSDNode *GA = dyn_cast<GlobalAddressSDNode>(Inner)) {
         Base = CurDAG->getTargetGlobalAddress(GA->getGlobal(), DL, MVT::i16,
-                                               GA->getOffset() + Offset);
+                                              GA->getOffset() + Offset);
         return true;
       }
     }

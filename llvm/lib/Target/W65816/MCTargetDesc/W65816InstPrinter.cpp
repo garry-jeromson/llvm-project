@@ -61,7 +61,8 @@ void W65816InstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
 }
 
 // Print 16-bit immediate as unsigned value
-// This ensures negative numbers are printed as unsigned to avoid assembler issues
+// This ensures negative numbers are printed as unsigned to avoid assembler
+// issues
 void W65816InstPrinter::printImm16(const MCInst *MI, unsigned OpNo,
                                    raw_ostream &OS) {
   const MCOperand &Op = MI->getOperand(OpNo);

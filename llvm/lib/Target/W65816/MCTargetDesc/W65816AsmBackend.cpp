@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "W65816FixupKinds.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
+#include "W65816FixupKinds.h"
 
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAssembler.h"
@@ -48,21 +48,18 @@ public:
 
   MCFixupKindInfo getFixupKindInfo(MCFixupKind Kind) const override;
 
-  unsigned getNumFixupKinds() const {
-    return W65816::NumTargetFixupKinds;
-  }
+  unsigned getNumFixupKinds() const { return W65816::NumTargetFixupKinds; }
 
   bool writeNopData(raw_ostream &OS, uint64_t Count,
                     const MCSubtargetInfo *STI) const override;
 
   std::optional<bool> evaluateFixup(const MCFragment &F, MCFixup &Fixup,
-                                    MCValue &Target,
-                                    uint64_t &Value) override;
+                                    MCValue &Target, uint64_t &Value) override;
 };
 
 void W65816AsmBackend::adjustFixupValue(const MCFixup &Fixup,
-                                         const MCValue &Target, uint64_t &Value,
-                                         MCContext *Ctx) const {
+                                        const MCValue &Target, uint64_t &Value,
+                                        MCContext *Ctx) const {
   unsigned Kind = Fixup.getKind();
 
   switch (Kind) {
@@ -85,7 +82,8 @@ void W65816AsmBackend::adjustFixupValue(const MCFixup &Fixup,
     // where PC = address after the 2-byte instruction = opcode_addr + 2
     // Fixup location is at opcode_addr + 1 (the offset byte)
     // Value from LLVM = target - fixup_location
-    // We need: offset = target - (opcode_addr + 2) = target - (fixup_location + 1)
+    // We need: offset = target - (opcode_addr + 2) = target - (fixup_location +
+    // 1)
     //        = (target - fixup_location) - 1 = Value - 1
     int64_t Offset = static_cast<int64_t>(Value) - 1;
     if (!isIntN(8, Offset)) {
@@ -101,11 +99,11 @@ void W65816AsmBackend::adjustFixupValue(const MCFixup &Fixup,
     // BRL is 3 bytes: opcode + 16-bit offset
     // Fixup is at offset byte (opcode_addr + 1)
     // PC after instruction = opcode_addr + 3
-    // offset = target - (opcode_addr + 3) = target - (fixup_location + 2) = Value - 2
+    // offset = target - (opcode_addr + 3) = target - (fixup_location + 2) =
+    // Value - 2
     int64_t Offset = static_cast<int64_t>(Value) - 2;
     if (!isIntN(16, Offset)) {
-      Ctx->reportError(Fixup.getLoc(),
-                       "branch target out of range for BRL");
+      Ctx->reportError(Fixup.getLoc(), "branch target out of range for BRL");
     }
     Value = static_cast<uint64_t>(Offset) & 0xFFFF;
     break;
@@ -144,8 +142,8 @@ W65816AsmBackend::createObjectTargetWriter() const {
 }
 
 void W65816AsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
-                                   const MCValue &Target, uint8_t *Data,
-                                   uint64_t Value, bool IsResolved) {
+                                  const MCValue &Target, uint8_t *Data,
+                                  uint64_t Value, bool IsResolved) {
   // Record relocation if fixup is not resolved
   maybeAddReloc(F, Fixup, Target, Value, IsResolved);
 
@@ -170,7 +168,8 @@ void W65816AsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
   }
 }
 
-std::optional<MCFixupKind> W65816AsmBackend::getFixupKind(StringRef Name) const {
+std::optional<MCFixupKind>
+W65816AsmBackend::getFixupKind(StringRef Name) const {
   // Map relocation names to fixup kinds if needed
   return std::nullopt;
 }
@@ -180,13 +179,10 @@ MCFixupKindInfo W65816AsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
   // Must be in the same order as W65816::Fixups enum
   const static MCFixupKindInfo Infos[W65816::NumTargetFixupKinds] = {
       // name                    offset  bits  flags
-      {"fixup_w65816_16", 0, 16, 0},
-      {"fixup_w65816_24", 0, 24, 0},
-      {"fixup_w65816_pcrel_8", 0, 8, 0},  // PC-rel handled in adjustFixupValue
-      {"fixup_w65816_pcrel_16", 0, 16, 0},
-      {"fixup_w65816_dp", 0, 8, 0},
-      {"fixup_w65816_imm8", 0, 8, 0},
-      {"fixup_w65816_imm16", 0, 16, 0},
+      {"fixup_w65816_16", 0, 16, 0},       {"fixup_w65816_24", 0, 24, 0},
+      {"fixup_w65816_pcrel_8", 0, 8, 0}, // PC-rel handled in adjustFixupValue
+      {"fixup_w65816_pcrel_16", 0, 16, 0}, {"fixup_w65816_dp", 0, 8, 0},
+      {"fixup_w65816_imm8", 0, 8, 0},      {"fixup_w65816_imm16", 0, 16, 0},
   };
 
   if (mc::isRelocation(Kind))
@@ -202,7 +198,7 @@ MCFixupKindInfo W65816AsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
 }
 
 bool W65816AsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
-                                     const MCSubtargetInfo *STI) const {
+                                    const MCSubtargetInfo *STI) const {
   // The 65816 NOP instruction is a single byte (0xEA)
   for (uint64_t i = 0; i < Count; ++i) {
     OS << static_cast<char>(0xEA);
@@ -211,9 +207,9 @@ bool W65816AsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
 }
 
 std::optional<bool> W65816AsmBackend::evaluateFixup(const MCFragment &F,
-                                                     MCFixup &Fixup,
-                                                     MCValue &Target,
-                                                     uint64_t &Value) {
+                                                    MCFixup &Fixup,
+                                                    MCValue &Target,
+                                                    uint64_t &Value) {
   // For absolute address fixups, force a relocation to be generated
   // because the final memory layout isn't known until link time.
   // This is especially important for cross-section references (e.g.,
@@ -226,7 +222,7 @@ std::optional<bool> W65816AsmBackend::evaluateFixup(const MCFragment &F,
   case W65816::fixup_w65816_imm16:
     // Always force relocation for address-type fixups
     // The final memory layout isn't known until link time
-    return false;  // Not resolved - will generate relocation
+    return false; // Not resolved - will generate relocation
 
   default:
     break;
@@ -241,9 +237,9 @@ std::optional<bool> W65816AsmBackend::evaluateFixup(const MCFragment &F,
 namespace llvm {
 
 MCAsmBackend *createW65816AsmBackend(const Target &T,
-                                      const MCSubtargetInfo &STI,
-                                      const MCRegisterInfo &MRI,
-                                      const MCTargetOptions &Options) {
+                                     const MCSubtargetInfo &STI,
+                                     const MCRegisterInfo &MRI,
+                                     const MCTargetOptions &Options) {
   return new W65816AsmBackend(STI.getTargetTriple().getOS());
 }
 

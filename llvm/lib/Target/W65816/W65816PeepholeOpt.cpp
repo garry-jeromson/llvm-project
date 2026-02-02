@@ -56,9 +56,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MCTargetDesc/W65816MCTargetDesc.h"
 #include "W65816.h"
 #include "W65816InstrInfo.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
 
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -92,7 +92,8 @@ char W65816PeepholeOpt::ID = 0;
 
 /// Check if two transfer opcodes form a redundant pair.
 /// Returns true for: TAX/TXA, TXA/TAX, TAY/TYA, TYA/TAY
-bool W65816PeepholeOpt::isRedundantTransferPair(unsigned First, unsigned Second) {
+bool W65816PeepholeOpt::isRedundantTransferPair(unsigned First,
+                                                unsigned Second) {
   return (First == W65816::TAX && Second == W65816::TXA) ||
          (First == W65816::TXA && Second == W65816::TAX) ||
          (First == W65816::TAY && Second == W65816::TYA) ||
@@ -204,8 +205,8 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
 
     // Check for redundant transfer pairs (TAX/TXA, TAY/TYA, etc.)
     if (isRedundantTransferPair(Opcode, NextOpcode)) {
-      LLVM_DEBUG(dbgs() << "Removing redundant transfer pair:\n  "
-                        << MI << "  " << NextMI);
+      LLVM_DEBUG(dbgs() << "Removing redundant transfer pair:\n  " << MI << "  "
+                        << NextMI);
       auto AfterNext = std::next(NextMBBI);
       MBB.erase(MBBI);
       MBB.erase(NextMBBI);
@@ -216,8 +217,8 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
 
     // Check for redundant push/pop pairs (PHA/PLA, PHX/PLX, PHY/PLY)
     if (isRedundantPushPopPair(Opcode, NextOpcode)) {
-      LLVM_DEBUG(dbgs() << "Removing redundant push/pop pair:\n  "
-                        << MI << "  " << NextMI);
+      LLVM_DEBUG(dbgs() << "Removing redundant push/pop pair:\n  " << MI << "  "
+                        << NextMI);
       auto AfterNext = std::next(NextMBBI);
       MBB.erase(MBBI);
       MBB.erase(NextMBBI);
@@ -247,8 +248,8 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
 
     // Check for redundant increment/decrement pairs (INX/DEX, INY/DEY, etc.)
     if (isRedundantIncDecPair(Opcode, NextOpcode)) {
-      LLVM_DEBUG(dbgs() << "Removing redundant inc/dec pair:\n  "
-                        << MI << "  " << NextMI);
+      LLVM_DEBUG(dbgs() << "Removing redundant inc/dec pair:\n  " << MI << "  "
+                        << NextMI);
       auto AfterNext = std::next(NextMBBI);
       MBB.erase(MBBI);
       MBB.erase(NextMBBI);
@@ -261,10 +262,11 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
     if (Opcode == W65816::LDA_imm16 && NextOpcode == W65816::TAX) {
       // Verify LDA has an immediate operand
       if (MI.getNumOperands() > 0 && MI.getOperand(0).isImm()) {
-        LLVM_DEBUG(dbgs() << "Replacing LDA #imm; TAX with LDX #imm:\n  "
-                          << MI << "  " << NextMI);
+        LLVM_DEBUG(dbgs() << "Replacing LDA #imm; TAX with LDX #imm:\n  " << MI
+                          << "  " << NextMI);
         // Replace LDA with LDX (keeps the same immediate operand)
-        MI.setDesc(MBB.getParent()->getSubtarget().getInstrInfo()->get(W65816::LDX_imm16));
+        MI.setDesc(MBB.getParent()->getSubtarget().getInstrInfo()->get(
+            W65816::LDX_imm16));
         // Remove TAX
         MBB.erase(NextMBBI);
         Modified = true;
@@ -277,10 +279,11 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
     if (Opcode == W65816::LDA_imm16 && NextOpcode == W65816::TAY) {
       // Verify LDA has an immediate operand
       if (MI.getNumOperands() > 0 && MI.getOperand(0).isImm()) {
-        LLVM_DEBUG(dbgs() << "Replacing LDA #imm; TAY with LDY #imm:\n  "
-                          << MI << "  " << NextMI);
+        LLVM_DEBUG(dbgs() << "Replacing LDA #imm; TAY with LDY #imm:\n  " << MI
+                          << "  " << NextMI);
         // Replace LDA with LDY (keeps the same immediate operand)
-        MI.setDesc(MBB.getParent()->getSubtarget().getInstrInfo()->get(W65816::LDY_imm16));
+        MI.setDesc(MBB.getParent()->getSubtarget().getInstrInfo()->get(
+            W65816::LDY_imm16));
         // Remove TAY
         MBB.erase(NextMBBI);
         Modified = true;
@@ -333,9 +336,10 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
 
     // Check for LDA #0; STA addr -> STZ addr optimization
     if (isLoadImmZero(MI) && NextOpcode == W65816::STA_abs) {
-      LLVM_DEBUG(dbgs() << "Replacing LDA #0; STA with STZ:\n  "
-                        << MI << "  " << NextMI);
-      const TargetInstrInfo *TII = MBB.getParent()->getSubtarget().getInstrInfo();
+      LLVM_DEBUG(dbgs() << "Replacing LDA #0; STA with STZ:\n  " << MI << "  "
+                        << NextMI);
+      const TargetInstrInfo *TII =
+          MBB.getParent()->getSubtarget().getInstrInfo();
       // Get the address operand from STA
       MachineOperand &AddrOp = NextMI.getOperand(1);
       // Build STZ instruction
@@ -352,9 +356,10 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
 
     // Check for LDA #0; STA dp -> STZ dp optimization
     if (isLoadImmZero(MI) && NextOpcode == W65816::STA_dp) {
-      LLVM_DEBUG(dbgs() << "Replacing LDA #0; STA dp with STZ dp:\n  "
-                        << MI << "  " << NextMI);
-      const TargetInstrInfo *TII = MBB.getParent()->getSubtarget().getInstrInfo();
+      LLVM_DEBUG(dbgs() << "Replacing LDA #0; STA dp with STZ dp:\n  " << MI
+                        << "  " << NextMI);
+      const TargetInstrInfo *TII =
+          MBB.getParent()->getSubtarget().getInstrInfo();
       // Get the address operand from STA (operand 1)
       MachineOperand &AddrOp = NextMI.getOperand(1);
       // Build STZ instruction
@@ -373,9 +378,10 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
     if (Opcode == W65816::CLC) {
       bool IsAdd;
       if (isAddSubImm1(NextMI, IsAdd) && IsAdd) {
-        LLVM_DEBUG(dbgs() << "Replacing CLC; ADC #1 with INC A:\n  "
-                          << MI << "  " << NextMI);
-        const TargetInstrInfo *TII = MBB.getParent()->getSubtarget().getInstrInfo();
+        LLVM_DEBUG(dbgs() << "Replacing CLC; ADC #1 with INC A:\n  " << MI
+                          << "  " << NextMI);
+        const TargetInstrInfo *TII =
+            MBB.getParent()->getSubtarget().getInstrInfo();
         // INC_A takes ACC16 input and produces ACC16 output
         // The ADC instruction uses A implicitly, so we do the same
         BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(W65816::INC_A))
@@ -395,9 +401,10 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
     if (Opcode == W65816::SEC) {
       bool IsAdd;
       if (isAddSubImm1(NextMI, IsAdd) && !IsAdd) {
-        LLVM_DEBUG(dbgs() << "Replacing SEC; SBC #1 with DEC A:\n  "
-                          << MI << "  " << NextMI);
-        const TargetInstrInfo *TII = MBB.getParent()->getSubtarget().getInstrInfo();
+        LLVM_DEBUG(dbgs() << "Replacing SEC; SBC #1 with DEC A:\n  " << MI
+                          << "  " << NextMI);
+        const TargetInstrInfo *TII =
+            MBB.getParent()->getSubtarget().getInstrInfo();
         // DEC_A takes ACC16 input and produces ACC16 output
         BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(W65816::DEC_A))
             .addReg(W65816::A)

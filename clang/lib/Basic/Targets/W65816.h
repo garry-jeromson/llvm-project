@@ -65,8 +65,8 @@ public:
 
   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
     static const TargetInfo::GCCRegAlias GCCRegAliases[] = {
-        {{"acc"}, "a"},  // Accumulator
-        {{"dp"}, "d"},   // Direct Page register
+        {{"acc"}, "a"}, // Accumulator
+        {{"dp"}, "d"},  // Direct Page register
     };
     return llvm::ArrayRef(GCCRegAliases);
   }
@@ -87,9 +87,7 @@ public:
     return false;
   }
 
-  std::string_view getClobbers() const override {
-    return "";
-  }
+  std::string_view getClobbers() const override { return ""; }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::CharPtrBuiltinVaList;

@@ -11,8 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "W65816MCCodeEmitter.h"
-#include "W65816FixupKinds.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
+#include "W65816FixupKinds.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCContext.h"
@@ -36,10 +36,10 @@ static void addFixup(SmallVectorImpl<MCFixup> &Fixups, uint32_t Offset,
   Fixups.push_back(MCFixup::create(Offset, Value, Kind, PCRel));
 }
 
-unsigned W65816MCCodeEmitter::getMachineOpValue(const MCInst &MI,
-                                                 const MCOperand &MO,
-                                                 SmallVectorImpl<MCFixup> &Fixups,
-                                                 const MCSubtargetInfo &STI) const {
+unsigned
+W65816MCCodeEmitter::getMachineOpValue(const MCInst &MI, const MCOperand &MO,
+                                       SmallVectorImpl<MCFixup> &Fixups,
+                                       const MCSubtargetInfo &STI) const {
   if (MO.isReg()) {
     // Return the register encoding
     return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
@@ -50,16 +50,18 @@ unsigned W65816MCCodeEmitter::getMachineOpValue(const MCInst &MI,
   }
 
   if (MO.isExpr()) {
-    // For expressions, we'll need a fixup - handled by specific encode functions
+    // For expressions, we'll need a fixup - handled by specific encode
+    // functions
     return 0;
   }
 
   llvm_unreachable("Unhandled operand type in getMachineOpValue");
 }
 
-unsigned W65816MCCodeEmitter::encodeImmediate(const MCInst &MI, unsigned OpNo,
-                                               SmallVectorImpl<MCFixup> &Fixups,
-                                               const MCSubtargetInfo &STI) const {
+unsigned
+W65816MCCodeEmitter::encodeImmediate(const MCInst &MI, unsigned OpNo,
+                                     SmallVectorImpl<MCFixup> &Fixups,
+                                     const MCSubtargetInfo &STI) const {
   const MCOperand &MO = MI.getOperand(OpNo);
 
   if (MO.isImm()) {
@@ -76,8 +78,8 @@ unsigned W65816MCCodeEmitter::encodeImmediate(const MCInst &MI, unsigned OpNo,
 }
 
 unsigned W65816MCCodeEmitter::encodeAddr16(const MCInst &MI, unsigned OpNo,
-                                            SmallVectorImpl<MCFixup> &Fixups,
-                                            const MCSubtargetInfo &STI) const {
+                                           SmallVectorImpl<MCFixup> &Fixups,
+                                           const MCSubtargetInfo &STI) const {
   const MCOperand &MO = MI.getOperand(OpNo);
 
   if (MO.isImm()) {
@@ -93,9 +95,10 @@ unsigned W65816MCCodeEmitter::encodeAddr16(const MCInst &MI, unsigned OpNo,
   llvm_unreachable("Unhandled operand in encodeAddr16");
 }
 
-unsigned W65816MCCodeEmitter::encodePCRelTarget(const MCInst &MI, unsigned OpNo,
-                                                 SmallVectorImpl<MCFixup> &Fixups,
-                                                 const MCSubtargetInfo &STI) const {
+unsigned
+W65816MCCodeEmitter::encodePCRelTarget(const MCInst &MI, unsigned OpNo,
+                                       SmallVectorImpl<MCFixup> &Fixups,
+                                       const MCSubtargetInfo &STI) const {
   const MCOperand &MO = MI.getOperand(OpNo);
 
   if (MO.isImm()) {
@@ -112,9 +115,10 @@ unsigned W65816MCCodeEmitter::encodePCRelTarget(const MCInst &MI, unsigned OpNo,
   llvm_unreachable("Unhandled operand in encodePCRelTarget");
 }
 
-unsigned W65816MCCodeEmitter::encodeStackRelOffset(const MCInst &MI, unsigned OpNo,
-                                                    SmallVectorImpl<MCFixup> &Fixups,
-                                                    const MCSubtargetInfo &STI) const {
+unsigned
+W65816MCCodeEmitter::encodeStackRelOffset(const MCInst &MI, unsigned OpNo,
+                                          SmallVectorImpl<MCFixup> &Fixups,
+                                          const MCSubtargetInfo &STI) const {
   const MCOperand &MO = MI.getOperand(OpNo);
 
   if (MO.isImm()) {
@@ -125,8 +129,8 @@ unsigned W65816MCCodeEmitter::encodeStackRelOffset(const MCInst &MI, unsigned Op
 }
 
 unsigned W65816MCCodeEmitter::encodeAddr24(const MCInst &MI, unsigned OpNo,
-                                            SmallVectorImpl<MCFixup> &Fixups,
-                                            const MCSubtargetInfo &STI) const {
+                                           SmallVectorImpl<MCFixup> &Fixups,
+                                           const MCSubtargetInfo &STI) const {
   const MCOperand &MO = MI.getOperand(OpNo);
 
   if (MO.isImm()) {
@@ -143,8 +147,8 @@ unsigned W65816MCCodeEmitter::encodeAddr24(const MCInst &MI, unsigned OpNo,
 }
 
 unsigned W65816MCCodeEmitter::encodeDP(const MCInst &MI, unsigned OpNo,
-                                        SmallVectorImpl<MCFixup> &Fixups,
-                                        const MCSubtargetInfo &STI) const {
+                                       SmallVectorImpl<MCFixup> &Fixups,
+                                       const MCSubtargetInfo &STI) const {
   const MCOperand &MO = MI.getOperand(OpNo);
 
   if (MO.isImm()) {
@@ -173,9 +177,9 @@ unsigned encodePCRelImm(const MCInst &MI, unsigned OpNo,
 
   if (MO.isExpr()) {
     // Expression - need a fixup
-    Fixups.push_back(MCFixup::create(1, MO.getExpr(),
-                                     static_cast<MCFixupKind>(W65816::fixup_w65816_pcrel_8),
-                                     true));
+    Fixups.push_back(MCFixup::create(
+        1, MO.getExpr(), static_cast<MCFixupKind>(W65816::fixup_w65816_pcrel_8),
+        true));
     return 0;
   }
 
@@ -195,9 +199,9 @@ unsigned encodePCRelImm16(const MCInst &MI, unsigned OpNo,
 
   if (MO.isExpr()) {
     // Expression - need a fixup
-    Fixups.push_back(MCFixup::create(1, MO.getExpr(),
-                                     static_cast<MCFixupKind>(W65816::fixup_w65816_pcrel_16),
-                                     true));
+    Fixups.push_back(MCFixup::create(
+        1, MO.getExpr(),
+        static_cast<MCFixupKind>(W65816::fixup_w65816_pcrel_16), true));
     return 0;
   }
 
@@ -205,9 +209,9 @@ unsigned encodePCRelImm16(const MCInst &MI, unsigned OpNo,
 }
 
 void W65816MCCodeEmitter::encodeInstruction(const MCInst &MI,
-                                             SmallVectorImpl<char> &CB,
-                                             SmallVectorImpl<MCFixup> &Fixups,
-                                             const MCSubtargetInfo &STI) const {
+                                            SmallVectorImpl<char> &CB,
+                                            SmallVectorImpl<MCFixup> &Fixups,
+                                            const MCSubtargetInfo &STI) const {
   const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
   uint64_t Size = Desc.getSize();
 
@@ -227,7 +231,7 @@ void W65816MCCodeEmitter::encodeInstruction(const MCInst &MI,
 #include "W65816GenMCCodeEmitter.inc"
 
 MCCodeEmitter *createW65816MCCodeEmitter(const MCInstrInfo &MCII,
-                                          MCContext &Ctx) {
+                                         MCContext &Ctx) {
   return new W65816MCCodeEmitter(MCII, Ctx);
 }
 

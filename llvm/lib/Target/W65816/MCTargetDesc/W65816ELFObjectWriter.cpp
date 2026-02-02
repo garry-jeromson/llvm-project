@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "W65816FixupKinds.h"
 #include "MCTargetDesc/W65816MCTargetDesc.h"
+#include "W65816FixupKinds.h"
 
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCELFObjectWriter.h"
@@ -52,10 +52,10 @@ public:
 
 W65816ELFObjectWriter::W65816ELFObjectWriter(uint8_t OSABI)
     : MCELFObjectTargetWriter(/*Is64Bit=*/false, OSABI, EM_W65816,
-                               /*HasRelocationAddend=*/true) {}
+                              /*HasRelocationAddend=*/true) {}
 
 bool W65816ELFObjectWriter::needsRelocateWithSymbol(const MCValue &Val,
-                                                     unsigned Type) const {
+                                                    unsigned Type) const {
   // For the W65816, we need relocations for absolute address references
   // because the final memory layout (where .text, .data, .rodata, etc. are
   // placed) isn't known until link time.
@@ -77,8 +77,8 @@ bool W65816ELFObjectWriter::needsRelocateWithSymbol(const MCValue &Val,
 }
 
 unsigned W65816ELFObjectWriter::getRelocType(const MCFixup &Fixup,
-                                              const MCValue &Target,
-                                              bool IsPCRel) const {
+                                             const MCValue &Target,
+                                             bool IsPCRel) const {
   switch (static_cast<unsigned>(Fixup.getKind())) {
   case FK_Data_1:
     return R_W65816_8;

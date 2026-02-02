@@ -42,7 +42,8 @@ MCAsmBackend *createW65816AsmBackend(const Target &T,
                                      const llvm::MCTargetOptions &TO);
 
 /// Creates an ELF object writer for W65816.
-std::unique_ptr<MCObjectTargetWriter> createW65816ELFObjectWriter(uint8_t OSABI);
+std::unique_ptr<MCObjectTargetWriter>
+createW65816ELFObjectWriter(uint8_t OSABI);
 
 } // end namespace llvm
 

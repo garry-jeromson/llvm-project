@@ -22,6 +22,6 @@ Target &getTheW65816Target() {
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
 LLVMInitializeW65816TargetInfo() {
   llvm::RegisterTarget<llvm::Triple::w65816> X(
-      llvm::getTheW65816Target(), "w65816",
-      "WDC 65816 16-bit Processor", "W65816");
+      llvm::getTheW65816Target(), "w65816", "WDC 65816 16-bit Processor",
+      "W65816");
 }

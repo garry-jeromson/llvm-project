@@ -12,12 +12,12 @@
 
 #include "W65816FrameLowering.h"
 
+#include "MCTargetDesc/W65816MCTargetDesc.h"
 #include "W65816.h"
 #include "W65816InstrInfo.h"
 #include "W65816MachineFunctionInfo.h"
 #include "W65816Subtarget.h"
 #include "W65816TargetMachine.h"
-#include "MCTargetDesc/W65816MCTargetDesc.h"
 
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -62,7 +62,8 @@ static bool isRecursiveFunction(const MachineFunction &MF) {
 
 /// Get the list of imaginary register DP addresses used by the function.
 /// Returns addresses in order: $10, $12, $14, etc.
-static SmallVector<unsigned, 16> getUsedImaginaryRegAddrs(const MachineFunction &MF) {
+static SmallVector<unsigned, 16>
+getUsedImaginaryRegAddrs(const MachineFunction &MF) {
   SmallVector<unsigned, 16> UsedAddrs;
   const MachineRegisterInfo &MRI = MF.getRegInfo();
 
@@ -71,14 +72,12 @@ static SmallVector<unsigned, 16> getUsedImaginaryRegAddrs(const MachineFunction 
     unsigned Reg;
     unsigned Addr;
   } ImagRegs[] = {
-    { W65816::RS0,  0x10 }, { W65816::RS1,  0x12 },
-    { W65816::RS2,  0x14 }, { W65816::RS3,  0x16 },
-    { W65816::RS4,  0x18 }, { W65816::RS5,  0x1A },
-    { W65816::RS6,  0x1C }, { W65816::RS7,  0x1E },
-    { W65816::RS8,  0x20 }, { W65816::RS9,  0x22 },
-    { W65816::RS10, 0x24 }, { W65816::RS11, 0x26 },
-    { W65816::RS12, 0x28 }, { W65816::RS13, 0x2A },
-    { W65816::RS14, 0x2C }, { W65816::RS15, 0x2E },
+      {W65816::RS0, 0x10},  {W65816::RS1, 0x12},  {W65816::RS2, 0x14},
+      {W65816::RS3, 0x16},  {W65816::RS4, 0x18},  {W65816::RS5, 0x1A},
+      {W65816::RS6, 0x1C},  {W65816::RS7, 0x1E},  {W65816::RS8, 0x20},
+      {W65816::RS9, 0x22},  {W65816::RS10, 0x24}, {W65816::RS11, 0x26},
+      {W65816::RS12, 0x28}, {W65816::RS13, 0x2A}, {W65816::RS14, 0x2C},
+      {W65816::RS15, 0x2E},
   };
 
   for (const auto &IR : ImagRegs) {
@@ -141,7 +140,8 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
   if (AFI->isInterruptOrNMIHandler()) {
     // Save A, X, Y (P is already saved by hardware on interrupt entry)
     // Use REP #$30 first to ensure we're in 16-bit mode for saving
-    BuildMI(MBB, MBBI, DL, TII.get(W65816::REP)).addImm(0x30)
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::REP))
+        .addImm(0x30)
         .setMIFlag(MachineInstr::FrameSetup);
     BuildMI(MBB, MBBI, DL, TII.get(W65816::PHA))
         .setMIFlag(MachineInstr::FrameSetup);
@@ -153,8 +153,8 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
 
   // For recursive functions, save imaginary registers in prologue.
   // This treats them like callee-saved registers, preserving values across
-  // recursive calls. Each stack frame saves the imaginary registers it inherited
-  // and restores them before returning.
+  // recursive calls. Each stack frame saves the imaginary registers it
+  // inherited and restores them before returning.
   //
   // We use PEI (Push Effective Indirect) which pushes from a DP address
   // without clobbering A, X, or Y (important because they may hold arguments).
@@ -172,9 +172,9 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
   // SEP #$20 sets M=1 (8-bit accumulator), SEP #$10 sets X=1 (8-bit index)
   unsigned ModeSetBits = 0;
   if (STI.uses8BitAccumulator())
-    ModeSetBits |= 0x20;  // M flag
+    ModeSetBits |= 0x20; // M flag
   if (STI.uses8BitIndex())
-    ModeSetBits |= 0x10;  // X flag
+    ModeSetBits |= 0x10; // X flag
 
   if (ModeSetBits != 0) {
     // Emit SEP to set the 8-bit mode(s)
@@ -189,7 +189,7 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
 
   // W65816 has a 16-bit stack pointer, so frames cannot exceed 64KB
   if (StackSize > 65535) {
-    report_fatal_error("W65816 stack frame too large: " + Twine(StackSize) +
+    report_fatal_error("w65816 stack frame too large: " + Twine(StackSize) +
                        " bytes requested (max 65535 bytes)");
   }
 
@@ -273,7 +273,8 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
   }
 
   // For interrupt handlers with no stack allocation, still need to restore regs
-  // Also continue if we have imaginary registers to restore for recursive functions
+  // Also continue if we have imaginary registers to restore for recursive
+  // functions
   if (StackSize == 0 && !AFI->isInterruptOrNMIHandler() && ImagRegAddrs.empty())
     return;
 
@@ -316,7 +317,8 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
     BuildMI(MBB, MBBI, DL, TII.get(W65816::CLC));
 
     // ADC #StackSize+2 - Add stack size plus 2 for prologue PHA
-    // Prologue: PHA (2 bytes) + SBC #StackSize (StackSize bytes) = StackSize + 2
+    // Prologue: PHA (2 bytes) + SBC #StackSize (StackSize bytes) = StackSize +
+    // 2
     BuildMI(MBB, MBBI, DL, TII.get(W65816::ADC_imm16), W65816::A)
         .addImm(StackSize + 2);
 
@@ -363,7 +365,8 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
     MachineBasicBlock::iterator TermMBBI = MBB.getFirstTerminator();
 
     // Ensure we're in 16-bit mode for restoring
-    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::REP)).addImm(0x30)
+    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::REP))
+        .addImm(0x30)
         .setMIFlag(MachineInstr::FrameDestroy);
     // Restore Y, X, A (reverse order of save)
     BuildMI(MBB, TermMBBI, DL, TII.get(W65816::PLY))
@@ -446,6 +449,7 @@ void W65816FrameLowering::determineCalleeSaves(MachineFunction &MF,
 
 void W65816FrameLowering::processFunctionBeforeFrameFinalized(
     MachineFunction &MF, RegScavenger *RS) const {
-  // Note: DP frame size validation is done in W65816RegisterInfo::eliminateFrameIndex
-  // because the final frame object offsets are only known at that point.
+  // Note: DP frame size validation is done in
+  // W65816RegisterInfo::eliminateFrameIndex because the final frame object
+  // offsets are only known at that point.
 }
