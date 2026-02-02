@@ -628,8 +628,8 @@ SDValue W65816TargetLowering::LowerStore(SDValue Op, SelectionDAG &DAG) const {
       return SDValue();
   }
 
-  // For storing through a pointer, same issue as LowerLoad
-  // Return SDValue() to let it fail, we'll add better handling later
+  // For other pointer stores, defer to default selection.
+  // Stack-relative indirect STA (offset,S),Y could be used for optimization.
   return SDValue();
 }
 
