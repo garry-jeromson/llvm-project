@@ -28,6 +28,7 @@
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -837,6 +838,25 @@ SDValue W65816TargetLowering::LowerFormalArguments(
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   MachineRegisterInfo &RegInfo = MF.getRegInfo();
+  const Function &F = MF.getFunction();
+
+  // Check for unsupported 32-bit and 64-bit argument types
+  // We check the original IR function signature, not the legalized types,
+  // because the type legalizer splits i32 into i16 pairs before we see them.
+  for (const Argument &Arg : F.args()) {
+    Type *ArgTy = Arg.getType();
+    if (ArgTy->isIntegerTy(32) || ArgTy->isIntegerTy(64)) {
+      F.getContext().diagnose(DiagnosticInfoUnsupported(
+          F, "32-bit and 64-bit integer arguments are not supported on W65816. "
+             "Use 16-bit types (short, int16_t) instead."));
+      // Populate InVals with undef values to avoid assertion failure
+      // The compilation will fail due to the error diagnostic
+      for (const auto &In : Ins) {
+        InVals.push_back(DAG.getUNDEF(In.VT));
+      }
+      return Chain;
+    }
+  }
 
   // Analyze the arguments
   SmallVector<CCValAssign, 16> ArgLocs;
@@ -906,9 +926,20 @@ SDValue W65816TargetLowering::LowerReturn(
     const SmallVectorImpl<SDValue> &OutVals, const SDLoc &DL,
     SelectionDAG &DAG) const {
 
+  MachineFunction &MF = DAG.getMachineFunction();
+  const Function &F = MF.getFunction();
+
+  // Check for unsupported 32-bit and 64-bit return types
+  // We check the original IR function signature, not the legalized types.
+  Type *RetTy = F.getReturnType();
+  if (RetTy->isIntegerTy(32) || RetTy->isIntegerTy(64)) {
+    F.getContext().diagnose(DiagnosticInfoUnsupported(
+        F, "32-bit and 64-bit return values are not supported on W65816. "
+           "Use 16-bit types (short, int16_t) instead."));
+  }
+
   SmallVector<CCValAssign, 16> RVLocs;
-  CCState CCInfo(CallConv, IsVarArg, DAG.getMachineFunction(), RVLocs,
-                 *DAG.getContext());
+  CCState CCInfo(CallConv, IsVarArg, MF, RVLocs, *DAG.getContext());
   CCInfo.AnalyzeReturn(Outs, RetCC_W65816);
 
   SDValue Glue;
@@ -949,6 +980,33 @@ SDValue W65816TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   CLI.IsTailCall = false;
 
   MachineFunction &MF = DAG.getMachineFunction();
+  const Function &CallerF = MF.getFunction();
+
+  // Check for unsupported 32-bit and 64-bit argument types in call
+  // For direct calls, we can check the callee's function signature
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    if (const Function *CalleeF = dyn_cast<Function>(G->getGlobal())) {
+      // Check callee's argument types
+      for (const Argument &Arg : CalleeF->args()) {
+        Type *ArgTy = Arg.getType();
+        if (ArgTy->isIntegerTy(32) || ArgTy->isIntegerTy(64)) {
+          CallerF.getContext().diagnose(DiagnosticInfoUnsupported(
+              CallerF,
+              "32-bit and 64-bit integer arguments are not supported on "
+              "W65816. Use 16-bit types (short, int16_t) instead."));
+          break;
+        }
+      }
+      // Check callee's return type
+      Type *RetTy = CalleeF->getReturnType();
+      if (RetTy->isIntegerTy(32) || RetTy->isIntegerTy(64)) {
+        CallerF.getContext().diagnose(DiagnosticInfoUnsupported(
+            CallerF,
+            "32-bit and 64-bit return values are not supported on W65816. "
+            "Use 16-bit types (short, int16_t) instead."));
+      }
+    }
+  }
 
   // Analyze operands of the call
   SmallVector<CCValAssign, 16> ArgLocs;
