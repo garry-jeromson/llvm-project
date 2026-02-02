@@ -139,3 +139,51 @@ loop:
 exit:
   ret i16 %val
 }
+
+;===----------------------------------------------------------------------===
+; Unsigned Greater Than (UGT) Branch
+; Requires: C=1 AND Z=0
+; Generated as: NOT(UGT) branches to else, which uses BEQ + BCC
+;===----------------------------------------------------------------------===
+
+; CHECK-LABEL: test_ugt_branch:
+; Comparison via SEC + SBC
+; CHECK: sec
+; CHECK: sbc
+; UGT uses compound condition - branch to else if NOT(UGT): Z=1 OR C=0
+; CHECK: beq
+; CHECK: bcc
+; CHECK: rts
+define i16 @test_ugt_branch(i16 %a, i16 %b) {
+entry:
+  %cmp = icmp ugt i16 %a, %b
+  br i1 %cmp, label %then, label %else
+then:
+  ret i16 1
+else:
+  ret i16 0
+}
+
+;===----------------------------------------------------------------------===
+; Unsigned Less or Equal (ULE) Branch
+; Requires: C=0 OR Z=1
+; Generated as: BEQ to then (Z=1), BCS to else (C=1 means A>B)
+;===----------------------------------------------------------------------===
+
+; CHECK-LABEL: test_ule_branch:
+; Comparison via SEC + SBC
+; CHECK: sec
+; CHECK: sbc
+; ULE: branch to then if equal, branch to else if strictly greater
+; CHECK: beq
+; CHECK: bcs
+; CHECK: rts
+define i16 @test_ule_branch(i16 %a, i16 %b) {
+entry:
+  %cmp = icmp ule i16 %a, %b
+  br i1 %cmp, label %then, label %else
+then:
+  ret i16 1
+else:
+  ret i16 0
+}
