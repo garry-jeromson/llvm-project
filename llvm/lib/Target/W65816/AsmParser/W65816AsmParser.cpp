@@ -673,11 +673,23 @@ bool W65816AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       if (ErrorLoc == SMLoc())
         ErrorLoc = IDLoc;
     }
-    return Error(ErrorLoc, "invalid operand for instruction");
+    // Include instruction name in error for better context
+    std::string Msg = "invalid operand for instruction";
+    if (!Operands.empty()) {
+      StringRef Mnemonic = ((W65816Operand &)*Operands[0]).getToken();
+      Msg = "invalid operand for '" + Mnemonic.str() + "' instruction";
+    }
+    return Error(ErrorLoc, Msg);
   }
 
-  case Match_MnemonicFail:
-    return Error(IDLoc, "unrecognized instruction mnemonic");
+  case Match_MnemonicFail: {
+    std::string Msg = "unrecognized instruction mnemonic";
+    if (!Operands.empty()) {
+      StringRef Mnemonic = ((W65816Operand &)*Operands[0]).getToken();
+      Msg = "unrecognized instruction mnemonic '" + Mnemonic.str() + "'";
+    }
+    return Error(IDLoc, Msg);
+  }
   }
 
   llvm_unreachable("Unknown match type detected!");

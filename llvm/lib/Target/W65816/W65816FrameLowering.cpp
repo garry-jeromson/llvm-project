@@ -189,7 +189,8 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
 
   // W65816 has a 16-bit stack pointer, so frames cannot exceed 64KB
   if (StackSize > 65535) {
-    report_fatal_error("W65816 stack frame too large (max 65535 bytes)");
+    report_fatal_error("W65816 stack frame too large: " + Twine(StackSize) +
+                       " bytes requested (max 65535 bytes)");
   }
 
   // Adjust the stack pointer by subtracting from it.
