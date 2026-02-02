@@ -79,6 +79,7 @@ intermediate LLVM representation.
    TableGenFundamentals
    Telemetry
    Vectorizers
+   W65816Usage
    WritingAnLLVMPass
    WritingAnLLVMNewPMPass
    WritingAnLLVMBackend
@@ -308,6 +309,10 @@ Additional Topics
 
 :doc:`RISCV/RISCVVectorExtension`
    This document describes how the RISC-V Vector extension can be expressed in LLVM IR and how code is generated for it in the backend.
+
+:doc:`W65816Usage`
+   This document describes using the W65816 target for the 16-bit microprocessor
+   used in the Super Nintendo (SNES) and Apple IIGS.
 
 :doc:`Sandbox IR <SandboxIR>`
    This document describes the design and usage of Sandbox IR, a transactional layer over LLVM IR.
