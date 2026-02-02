@@ -159,6 +159,12 @@ private:
 
   // Helper to get the Direct Page address for an imaginary register
   unsigned getImaginaryRegDPAddr(Register Reg) const;
+
+  // Get list of imaginary registers used by the function
+  SmallVector<unsigned, 16> getUsedImaginaryRegs() const;
+
+  // Wrap a call instruction with imaginary register save/restore
+  bool wrapCallWithImagSaveRestore(Block &MBB, BlockIt MBBI);
 };
 
 char W65816ExpandPseudo::ID = 0;
@@ -345,6 +351,10 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandORA_IMAG(MBB, MBBI);
   case W65816::EOR_IMAG:
     return expandEOR_IMAG(MBB, MBBI);
+  // Call instructions - wrap with imaginary register save/restore
+  case W65816::JSR:
+  case W65816::JSL:
+    return wrapCallWithImagSaveRestore(MBB, MBBI);
   default:
     return false;
   }
@@ -4335,6 +4345,88 @@ unsigned W65816ExpandPseudo::getImaginaryRegDPAddr(Register Reg) const {
   default:
     llvm_unreachable("Invalid imaginary register");
   }
+}
+
+SmallVector<unsigned, 16> W65816ExpandPseudo::getUsedImaginaryRegs() const {
+  SmallVector<unsigned, 16> UsedRegs;
+
+  // List of all imaginary registers with their DP addresses
+  static const struct {
+    unsigned Reg;
+    unsigned DPAddr;
+  } ImaginaryRegs[] = {
+    { W65816::RS0,  0x10 },
+    { W65816::RS1,  0x12 },
+    { W65816::RS2,  0x14 },
+    { W65816::RS3,  0x16 },
+    { W65816::RS4,  0x18 },
+    { W65816::RS5,  0x1A },
+    { W65816::RS6,  0x1C },
+    { W65816::RS7,  0x1E },
+    { W65816::RS8,  0x20 },
+    { W65816::RS9,  0x22 },
+    { W65816::RS10, 0x24 },
+    { W65816::RS11, 0x26 },
+    { W65816::RS12, 0x28 },
+    { W65816::RS13, 0x2A },
+    { W65816::RS14, 0x2C },
+    { W65816::RS15, 0x2E },
+  };
+
+  // Check each imaginary register for usage
+  for (const auto &IR : ImaginaryRegs) {
+    if (!MRI->reg_nodbg_empty(IR.Reg)) {
+      UsedRegs.push_back(IR.DPAddr);
+    }
+  }
+
+  return UsedRegs;
+}
+
+bool W65816ExpandPseudo::wrapCallWithImagSaveRestore(Block &MBB, BlockIt MBBI) {
+  // Get the list of imaginary registers used by this function
+  SmallVector<unsigned, 16> UsedImagRegs = getUsedImaginaryRegs();
+
+  // If no imaginary registers are used, no need to save/restore
+  if (UsedImagRegs.empty())
+    return false;
+
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // BEFORE the call: Save all used imaginary registers using PEI
+  // PEI ($dp) pushes 16-bit value from DP address without clobbering any registers
+  // Save in forward order: RS0, RS1, ... (will restore in reverse)
+  for (unsigned DPAddr : UsedImagRegs) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::PEI))
+        .addImm(DPAddr);
+  }
+
+  // Move past the call instruction to insert restore code AFTER it
+  BlockIt AfterCall = std::next(MBBI);
+
+  // AFTER the call: Restore all used imaginary registers
+  // A contains the return value, so we need to preserve it
+  // Sequence: TAX, (PLA + STA $dp for each reg in reverse), TXA
+
+  // Save return value in X (X is caller-saved, safe to use)
+  BuildMI(MBB, AfterCall, DL, TII->get(W65816::TAX));
+
+  // Restore in reverse order (since stack is LIFO)
+  for (auto It = UsedImagRegs.rbegin(); It != UsedImagRegs.rend(); ++It) {
+    unsigned DPAddr = *It;
+    // Pop from stack into A
+    BuildMI(MBB, AfterCall, DL, TII->get(W65816::PLA));
+    // Store to DP location
+    BuildMI(MBB, AfterCall, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  // Restore return value from X
+  BuildMI(MBB, AfterCall, DL, TII->get(W65816::TXA));
+
+  return true;
 }
 
 bool W65816ExpandPseudo::expandCOPY_TO_IMAG(Block &MBB, BlockIt MBBI) {
