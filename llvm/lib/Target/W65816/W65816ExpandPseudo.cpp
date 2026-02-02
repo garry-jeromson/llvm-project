@@ -853,9 +853,17 @@ static unsigned getW65816BranchOpcode(unsigned CC) {
   }
 }
 
-// Check if this is a signed comparison that needs multi-instruction expansion
-static bool isSignedCondCode(unsigned CC) {
-  return CC >= W65816CC::COND_SLT && CC <= W65816CC::COND_SLE;
+// Check if this is a compound comparison that needs multi-instruction expansion
+// This includes signed comparisons (SLT, SGT, SGE, SLE) and unsigned compound
+// comparisons (UGT, ULE) which cannot be expressed with a single branch.
+static bool isCompoundCondCode(unsigned CC) {
+  // Signed comparisons: COND_SLT, COND_SGT, COND_SGE, COND_SLE
+  if (CC >= W65816CC::COND_SLT && CC <= W65816CC::COND_SLE)
+    return true;
+  // Unsigned compound comparisons: COND_UGT (C=1 AND Z=0), COND_ULE (C=0 OR Z=1)
+  if (CC == W65816CC::COND_UGT || CC == W65816CC::COND_ULE)
+    return true;
+  return false;
 }
 
 bool W65816ExpandPseudo::expandBR_CC(Block &MBB, BlockIt MBBI) {
@@ -867,7 +875,7 @@ bool W65816ExpandPseudo::expandBR_CC(Block &MBB, BlockIt MBBI) {
   unsigned CC = MI.getOperand(1).getImm();
 
   // For simple conditions, emit a single branch
-  if (!isSignedCondCode(CC)) {
+  if (!isCompoundCondCode(CC)) {
     unsigned BranchOpc = getW65816BranchOpcode(CC);
     BuildMI(MBB, MBBI, DL, TII->get(BranchOpc)).addMBB(TargetBB);
     MI.eraseFromParent();
@@ -1035,8 +1043,54 @@ bool W65816ExpandPseudo::expandBR_CC(Block &MBB, BlockIt MBBI) {
     break;
   }
 
+  case W65816CC::COND_UGT: {
+    // Unsigned greater than: branch if C=1 AND Z=0
+    // Sequence:
+    //   BEQ .Lnot_taken   ; if Z=1, A == B, don't take
+    //   BCS TargetBB      ; if C=1 (and Z=0), A > B, take
+    //   ; fall through to not_taken if C=0 (A < B)
+    // .Lnot_taken:
+    MachineBasicBlock *NotTakenBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
+
+    MF->insert(std::next(MBB.getIterator()), NotTakenBB);
+
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::BEQ)).addMBB(NotTakenBB);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::BCS)).addMBB(TargetBB);
+    // Fall through to NotTakenBB for C=0 case
+
+    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
+    NotTakenBB->transferSuccessors(&MBB);
+
+    MBB.addSuccessor(TargetBB);
+    MBB.addSuccessor(NotTakenBB);
+    break;
+  }
+
+  case W65816CC::COND_ULE: {
+    // Unsigned less or equal: branch if C=0 OR Z=1
+    // Sequence:
+    //   BEQ TargetBB      ; if Z=1, A == B, take
+    //   BCC TargetBB      ; if C=0, A < B, take
+    //   ; fall through (C=1 and Z=0, A > B, don't take)
+    // .Lnot_taken:
+    MachineBasicBlock *NotTakenBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
+
+    MF->insert(std::next(MBB.getIterator()), NotTakenBB);
+
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::BEQ)).addMBB(TargetBB);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::BCC)).addMBB(TargetBB);
+    // Fall through to NotTakenBB for C=1 && Z=0 case
+
+    NotTakenBB->splice(NotTakenBB->end(), &MBB, std::next(MBBI), MBB.end());
+    NotTakenBB->transferSuccessors(&MBB);
+
+    MBB.addSuccessor(TargetBB);
+    MBB.addSuccessor(NotTakenBB);
+    break;
+  }
+
   default:
-    llvm_unreachable("Unknown signed condition code");
+    llvm_unreachable("Unknown compound condition code");
   }
 
   MI.eraseFromParent();
