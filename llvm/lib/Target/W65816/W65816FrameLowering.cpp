@@ -32,6 +32,64 @@
 
 using namespace llvm;
 
+//===----------------------------------------------------------------------===//
+// Recursive Function Detection and Imaginary Register Save/Restore
+//===----------------------------------------------------------------------===//
+
+/// Check if a function is recursive (calls itself directly).
+static bool isRecursiveFunction(const MachineFunction &MF) {
+  StringRef FuncName = MF.getName();
+
+  for (const MachineBasicBlock &MBB : MF) {
+    for (const MachineInstr &MI : MBB) {
+      if (MI.isCall()) {
+        for (const MachineOperand &MO : MI.operands()) {
+          if (MO.isGlobal()) {
+            if (const Function *F = dyn_cast<Function>(MO.getGlobal())) {
+              if (F->getName() == FuncName)
+                return true;
+            }
+          } else if (MO.isSymbol()) {
+            if (StringRef(MO.getSymbolName()) == FuncName)
+              return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/// Get the list of imaginary register DP addresses used by the function.
+/// Returns addresses in order: $10, $12, $14, etc.
+static SmallVector<unsigned, 16> getUsedImaginaryRegAddrs(const MachineFunction &MF) {
+  SmallVector<unsigned, 16> UsedAddrs;
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+
+  // List of imaginary registers and their DP addresses
+  static const struct {
+    unsigned Reg;
+    unsigned Addr;
+  } ImagRegs[] = {
+    { W65816::RS0,  0x10 }, { W65816::RS1,  0x12 },
+    { W65816::RS2,  0x14 }, { W65816::RS3,  0x16 },
+    { W65816::RS4,  0x18 }, { W65816::RS5,  0x1A },
+    { W65816::RS6,  0x1C }, { W65816::RS7,  0x1E },
+    { W65816::RS8,  0x20 }, { W65816::RS9,  0x22 },
+    { W65816::RS10, 0x24 }, { W65816::RS11, 0x26 },
+    { W65816::RS12, 0x28 }, { W65816::RS13, 0x2A },
+    { W65816::RS14, 0x2C }, { W65816::RS15, 0x2E },
+  };
+
+  for (const auto &IR : ImagRegs) {
+    if (!MRI.reg_nodbg_empty(IR.Reg)) {
+      UsedAddrs.push_back(IR.Addr);
+    }
+  }
+
+  return UsedAddrs;
+}
+
 W65816FrameLowering::W65816FrameLowering()
     : TargetFrameLowering(TargetFrameLowering::StackGrowsDown,
                           /*StackAlignment=*/Align(2),
@@ -91,6 +149,22 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
         .setMIFlag(MachineInstr::FrameSetup);
     BuildMI(MBB, MBBI, DL, TII.get(W65816::PHY))
         .setMIFlag(MachineInstr::FrameSetup);
+  }
+
+  // For recursive functions, save imaginary registers in prologue.
+  // This treats them like callee-saved registers, preserving values across
+  // recursive calls. Each stack frame saves the imaginary registers it inherited
+  // and restores them before returning.
+  //
+  // We use PEI (Push Effective Indirect) which pushes from a DP address
+  // without clobbering A, X, or Y (important because they may hold arguments).
+  if (isRecursiveFunction(MF)) {
+    SmallVector<unsigned, 16> ImagRegAddrs = getUsedImaginaryRegAddrs(MF);
+    for (unsigned Addr : ImagRegAddrs) {
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::PEI))
+          .addImm(Addr)
+          .setMIFlag(MachineInstr::FrameSetup);
+    }
   }
 
   // Set processor mode based on subtarget features
@@ -187,8 +261,16 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
 
   uint64_t StackSize = MFI.getStackSize();
 
+  // Check if this is a recursive function with imaginary registers to restore
+  bool IsRecursive = isRecursiveFunction(MF);
+  SmallVector<unsigned, 16> ImagRegAddrs;
+  if (IsRecursive) {
+    ImagRegAddrs = getUsedImaginaryRegAddrs(MF);
+  }
+
   // For interrupt handlers with no stack allocation, still need to restore regs
-  if (StackSize == 0 && !AFI->isInterruptOrNMIHandler())
+  // Also continue if we have imaginary registers to restore for recursive functions
+  if (StackSize == 0 && !AFI->isInterruptOrNMIHandler() && ImagRegAddrs.empty())
     return;
 
   // Restore the stack pointer by adding back the stack size
@@ -242,6 +324,32 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
 
     // Restore return value from Y
     BuildMI(MBB, MBBI, DL, TII.get(W65816::TYA));
+  }
+
+  // For recursive functions, restore imaginary registers from the stack.
+  // These were saved in the prologue using PEI. Now we pop them back using
+  // PLA + STA, being careful to preserve the return value in A.
+  if (!ImagRegAddrs.empty()) {
+    // Re-get the terminator position after any stack cleanup
+    MachineBasicBlock::iterator TermMBBI = MBB.getFirstTerminator();
+
+    // Save return value (A) to X temporarily
+    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::TAX))
+        .setMIFlag(MachineInstr::FrameDestroy);
+
+    // Pop and restore imaginary registers in reverse order (LIFO)
+    for (auto It = ImagRegAddrs.rbegin(); It != ImagRegAddrs.rend(); ++It) {
+      BuildMI(MBB, TermMBBI, DL, TII.get(W65816::PLA))
+          .setMIFlag(MachineInstr::FrameDestroy);
+      BuildMI(MBB, TermMBBI, DL, TII.get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(*It)
+          .setMIFlag(MachineInstr::FrameDestroy);
+    }
+
+    // Restore return value from X
+    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::TXA))
+        .setMIFlag(MachineInstr::FrameDestroy);
   }
 
   // For interrupt handlers, restore saved registers
