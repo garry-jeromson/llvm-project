@@ -1116,6 +1116,19 @@ bool W65816ExpandPseudo::expandSHL16ri(Block &MBB, BlockIt MBBI) {
   }
   // If SrcReg == A, it's already there
 
+  // Optimization: shift left by 8 can use XBA + AND
+  // XBA swaps high and low bytes, then AND #$FF00 clears the low byte.
+  // This is 4 bytes (XBA=1, AND imm16=3) vs 8 bytes (8x ASL=8).
+  if (ShiftAmt == 8) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A)
+        .addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0xFF00);
+    MI.eraseFromParent();
+    return true;
+  }
+
   // Emit ShiftAmt ASL A instructions
   for (unsigned i = 0; i < ShiftAmt; ++i) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::ASL_A), W65816::A)
@@ -1144,6 +1157,19 @@ bool W65816ExpandPseudo::expandSRL16ri(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TXA));
   } else if (SrcReg == W65816::Y) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TYA));
+  }
+
+  // Optimization: lshr by 8 can use XBA + AND
+  // XBA swaps high and low bytes, then AND #$00FF clears the high byte.
+  // This is 4 bytes (XBA=1, AND imm16=3) vs 8 bytes (8x LSR=8).
+  if (ShiftAmt == 8) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A)
+        .addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0x00FF);
+    MI.eraseFromParent();
+    return true;
   }
 
   // Optimization: lshr by 15 extracts the sign bit (bit 15).
@@ -1191,6 +1217,32 @@ bool W65816ExpandPseudo::expandSRA16ri(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TXA));
   } else if (SrcReg == W65816::Y) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TYA));
+  }
+
+  // Optimization: ashr by 8 can use XBA + sign extension trick.
+  // After XBA, the original high byte is in the low byte position.
+  // We need to sign-extend it. The trick is:
+  //   XBA                ; swap bytes: LLHH
+  //   AND #$00FF         ; isolate byte: 00HH
+  //   EOR #$0080         ; flip sign bit
+  //   SEC                ; set carry for subtraction
+  //   SBC #$0080         ; subtract $80, which sign-extends
+  // This is 11 bytes vs 32 bytes (8x CMP+ROR).
+  if (ShiftAmt == 8) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A)
+        .addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0x00FF);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0x0080);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::SEC));
+    // Note: SBC_imm16 only takes the immediate, A is implicit
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_imm16), W65816::A)
+        .addImm(0x0080);
+    MI.eraseFromParent();
+    return true;
   }
 
   // For arithmetic shift right, we need to:
