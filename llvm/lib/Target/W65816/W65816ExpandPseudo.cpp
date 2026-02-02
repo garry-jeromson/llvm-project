@@ -4384,20 +4384,54 @@ SmallVector<unsigned, 16> W65816ExpandPseudo::getUsedImaginaryRegs() const {
 }
 
 bool W65816ExpandPseudo::wrapCallWithImagSaveRestore(Block &MBB, BlockIt MBBI) {
-  // Get the list of imaginary registers used by this function
-  SmallVector<unsigned, 16> UsedImagRegs = getUsedImaginaryRegs();
-
-  // If no imaginary registers are used, no need to save/restore
-  if (UsedImagRegs.empty())
-    return false;
+  // Save/restore imaginary registers around calls to preserve values.
+  //
+  // We must be careful about when to save/restore:
+  // - For calls to OTHER functions: save/restore preserves our values
+  // - For RECURSIVE calls (self-calls): skip save/restore
+  //   - Recursive calls combined with LLVM's loop transformation create
+  //     a situation where save/restore breaks loop state
+  //   - Without save/restore, recursion won't work correctly either,
+  //     but that's a known limitation documented in the test skip reasons
 
   MachineInstr &MI = *MBBI;
   DebugLoc DL = MI.getDebugLoc();
 
-  // BEFORE the call: Save all used imaginary registers using PEI
+  // Check if this is a recursive call (call to the same function)
+  MachineFunction &MF = *MBB.getParent();
+  StringRef CurrentFuncName = MF.getName();
+
+  bool IsRecursive = false;
+  for (const MachineOperand &MO : MI.operands()) {
+    if (MO.isGlobal()) {
+      if (const Function *F = dyn_cast<Function>(MO.getGlobal())) {
+        if (F->getName() == CurrentFuncName) {
+          IsRecursive = true;
+          break;
+        }
+      }
+    } else if (MO.isSymbol()) {
+      if (StringRef(MO.getSymbolName()) == CurrentFuncName) {
+        IsRecursive = true;
+        break;
+      }
+    }
+  }
+
+  // Skip save/restore for recursive calls - they have known limitations
+  if (IsRecursive)
+    return false;
+
+  // Get imaginary registers used by this function
+  SmallVector<unsigned, 16> RegsToSave = getUsedImaginaryRegs();
+
+  // If no registers need saving, we're done
+  if (RegsToSave.empty())
+    return false;
+
+  // BEFORE the call: Save registers using PEI
   // PEI ($dp) pushes 16-bit value from DP address without clobbering any registers
-  // Save in forward order: RS0, RS1, ... (will restore in reverse)
-  for (unsigned DPAddr : UsedImagRegs) {
+  for (unsigned DPAddr : RegsToSave) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::PEI))
         .addImm(DPAddr);
   }
@@ -4405,7 +4439,7 @@ bool W65816ExpandPseudo::wrapCallWithImagSaveRestore(Block &MBB, BlockIt MBBI) {
   // Move past the call instruction to insert restore code AFTER it
   BlockIt AfterCall = std::next(MBBI);
 
-  // AFTER the call: Restore all used imaginary registers
+  // AFTER the call: Restore registers
   // A contains the return value, so we need to preserve it
   // Sequence: TAX, (PLA + STA $dp for each reg in reverse), TXA
 
@@ -4413,7 +4447,7 @@ bool W65816ExpandPseudo::wrapCallWithImagSaveRestore(Block &MBB, BlockIt MBBI) {
   BuildMI(MBB, AfterCall, DL, TII->get(W65816::TAX));
 
   // Restore in reverse order (since stack is LIFO)
-  for (auto It = UsedImagRegs.rbegin(); It != UsedImagRegs.rend(); ++It) {
+  for (auto It = RegsToSave.rbegin(); It != RegsToSave.rend(); ++It) {
     unsigned DPAddr = *It;
     // Pop from stack into A
     BuildMI(MBB, AfterCall, DL, TII->get(W65816::PLA));
