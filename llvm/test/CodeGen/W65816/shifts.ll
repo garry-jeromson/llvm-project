@@ -57,6 +57,31 @@ define i16 @lshr_2(i16 %a) {
   ret i16 %r
 }
 
+; Test lshr by 15 - extracts sign bit efficiently
+; Instead of 15 LSR instructions, uses: ASL A, LDA #0, ROL A
+; CHECK-LABEL: lshr_15:
+; CHECK: asl a
+; CHECK-NEXT: lda #0
+; CHECK-NEXT: rol a
+; CHECK: rts
+define i16 @lshr_15(i16 %a) {
+  %r = lshr i16 %a, 15
+  ret i16 %r
+}
+
+; Test that icmp slt with 0 also uses the optimized lshr 15 pattern
+; (LLVM optimizer transforms val < 0 to (lshr val, 15) != 0)
+; CHECK-LABEL: test_slt_zero:
+; CHECK: asl a
+; CHECK-NEXT: lda #0
+; CHECK-NEXT: rol a
+; CHECK: rts
+define i16 @test_slt_zero(i16 %val) {
+  %cmp = icmp slt i16 %val, 0
+  %result = zext i1 %cmp to i16
+  ret i16 %result
+}
+
 ;===----------------------------------------------------------------------===
 ; Variable Shifts (uses loop)
 ;===----------------------------------------------------------------------===

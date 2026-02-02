@@ -1146,6 +1146,23 @@ bool W65816ExpandPseudo::expandSRL16ri(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TYA));
   }
 
+  // Optimization: lshr by 15 extracts the sign bit (bit 15).
+  // Instead of 15 LSR instructions, use:
+  //   ASL A    ; shift bit 15 into carry
+  //   LDA #0   ; clear A
+  //   ROL A    ; rotate carry into bit 0 (A = 0 or 1)
+  // This is 3 instructions vs 15, and avoids register pressure issues.
+  if (ShiftAmt == 15) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ASL_A), W65816::A)
+        .addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A)
+        .addImm(0);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ROL_A), W65816::A)
+        .addReg(W65816::A);
+    MI.eraseFromParent();
+    return true;
+  }
+
   // Emit ShiftAmt LSR A instructions
   for (unsigned i = 0; i < ShiftAmt; ++i) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::LSR_A), W65816::A)
