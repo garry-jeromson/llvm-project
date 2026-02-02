@@ -398,11 +398,9 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
 
   // Check if src1 is a global address (address computation case)
   if (!MI.getOperand(1).isReg()) {
-    // This is base_addr + offset computation for indexed access
-    // src1 = global address, src2 = offset in register
-    // We need to put the offset in X/Y and use indexed addressing later
-    // For now, emit: TAX (put offset in X), then store global addr in A
-    // The subsequent LDA_abs will need to become LDA_absX
+    // Base address + offset computation for indexed access.
+    // src1 = global address, src2 = offset in register.
+    // Move offset to X for indexed addressing (base,X).
 
     // Get the offset register (src2)
     Register OffsetReg = MI.getOperand(2).getReg();
@@ -1532,12 +1530,10 @@ bool W65816ExpandPseudo::expandSHL16rv(Block &MBB, BlockIt MBBI) {
 
   // Get amount into X (we'll use X as counter)
   if (AmtInA) {
-    // Amount is in A, but we need source in A too
-    // Save source first, then swap
+    // Amount is in A, but we need source in A too.
+    // Push source, move amt to X, restore source.
+    // Note: assumes amt != src (register allocator should ensure this)
     buildMI(MBB, MBBI, W65816::PHA);   // push source (which just got moved to A)
-    // Now we need to get the original amt... but if amt was in AL, source might have clobbered it
-    // This is a register allocation issue - for now, let's just handle the simple case
-    // where amt != src
     buildMI(MBB, MBBI, W65816::TAX);
     buildMI(MBB, MBBI, W65816::PLA);   // restore source
   } else if (AmtReg == W65816::YL || AmtReg == W65816::Y) {
@@ -2913,34 +2909,14 @@ bool W65816ExpandPseudo::expandSelect16Signed(Block &MBB, BlockIt MBBI,
   //   ; Assume A has falseVal, need to check if we should use trueVal
   //   ; Result goes to DstReg
   //
-  //   First, put falseVal in result
-  //   Then check if condition is true and overwrite with trueVal
-
-  // For now, use a simpler approach: generate branchless code using
-  // the stack to preserve values during the conditional check.
+  // Implementation: Use a diamond pattern of basic blocks.
+  // - MBB: evaluate condition, branch to TrueMBB or FalseMBB
+  // - TrueMBB: load trueVal, branch to SinkMBB
+  // - FalseMBB: load falseVal, branch to SinkMBB
+  // - SinkMBB: phi-like merge, result in A
   //
-  // Actually, the cleanest way is to use Y to hold one value while
-  // checking conditions in A.
-
-  // Determine which register has which value
-  // The calling convention typically has trueVal in some GPR and falseVal in another
-
-  // Simplest implementation: always move result to A at the end
-  // Store falseVal as default, then conditionally overwrite with trueVal
-
-  // This approach: branchless select using stack manipulation
-  // 1. Push trueVal to stack
-  // 2. Load falseVal to A (or wherever dst is)
-  // 3. Check condition
-  // 4. If condition true, load from stack to overwrite
-  // 5. Clean stack
-
-  // Actually, for W65816 with limited registers, let's use a branch-based
-  // approach but keep everything in a single basic block using local labels.
-  // Unfortunately, MachineIR doesn't support local labels easily.
-
-  // Let's use a different approach: since we're post-branch-folder,
-  // we can create basic blocks that won't be optimized away.
+  // For signed comparisons, an extra VSetBB handles the V=1 case
+  // to properly evaluate N != V (SLT) or N == V (SGE) conditions.
 
   const BasicBlock *BB = MBB.getBasicBlock();
 
@@ -4132,8 +4108,8 @@ bool W65816ExpandPseudo::expandSTA8indexedX(Block &MBB, BlockIt MBBI) {
 
   // Now get idx to X
   if (IdxInA) {
-    // We just put src in A, but idx was in A - this is a conflict
-    // For now assume register allocator handles this
+    // Both src and idx were in A - register allocator should prevent this.
+    // If it happens, idx was clobbered; TAX will move src (not idx) to X.
     buildMI(MBB, MBBI, W65816::TAX);
   } else if (IdxReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::PHY);  // Save Y

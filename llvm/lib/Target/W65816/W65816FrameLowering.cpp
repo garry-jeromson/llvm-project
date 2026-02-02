@@ -97,8 +97,8 @@ W65816FrameLowering::W65816FrameLowering()
                           /*TransientStackAlignment=*/Align(2)) {}
 
 bool W65816FrameLowering::hasFPImpl(const MachineFunction &MF) const {
-  // For now, never use a frame pointer
-  // The D register could be used as a frame pointer in the future
+  // W65816 uses stack-relative addressing instead of a frame pointer.
+  // The D register is reserved for Direct Page frame optimization.
   return false;
 }
 
@@ -192,16 +192,14 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
     report_fatal_error("W65816 stack frame too large (max 65535 bytes)");
   }
 
-  // Adjust the stack pointer by subtracting from it
-  // W65816 doesn't have a direct subtract from SP instruction,
-  // so we need to: TSX, TXA, SEC, SBC #imm, TAX, TXS
-  // But this clobbers A and X which may be used for arguments!
+  // Adjust the stack pointer by subtracting from it.
+  // W65816 doesn't have a direct subtract from SP instruction.
   //
-  // Alternative approach for small stack sizes: use PHA repeatedly
-  // Each PHA decrements SP by 2 (in 16-bit mode)
+  // For small frames (<=8 bytes): use PHA repeatedly (2 bytes each).
+  // This preserves A/X which may hold function arguments.
   //
-  // For now, use the transfer approach but note this is problematic
-  // for functions with arguments in A/X
+  // For large frames: use TSX/TXA/SEC/SBC/TAX/TXS sequence.
+  // We save A first with PHA, then restore it after adjustment.
 
   if (StackSize <= 8) {
     // For small stack sizes, use PHA to adjust (each PHA = 2 bytes)

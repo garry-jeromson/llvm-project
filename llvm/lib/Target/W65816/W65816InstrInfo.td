@@ -2215,8 +2215,9 @@ def : Pat<(i16 (zextloadi8 addr:$addr)),
           (LDA8_abs addr16:$addr)>;
 
 // Sign-extending load from i8 to i16 (from absolute address)
-// Note: For sign extension, we'd need additional logic after the load
-// For now, treat as zero-extend (caller may need to handle sign extension)
+// Limitation: Uses zero-extension. True sign extension would require
+// checking bit 7 and setting high byte to $00 or $FF accordingly.
+// C code using signed char may need explicit sign extension.
 def : Pat<(i16 (sextloadi8 addr:$addr)),
           (LDA8_abs addr16:$addr)>;
 

@@ -102,14 +102,11 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
       DPOpcode = W65816::STA_dp;
       break;
     case W65816::ADC_sr:
-      // ADC_dp doesn't exist in our ISA, would need to add it
-      // For now, fall through to regular handling
-      break;
     case W65816::SBC_sr:
-      // SBC_dp doesn't exist in our ISA, would need to add it
+      // ADC_dp/SBC_dp not defined - use stack-relative addressing
       break;
     default:
-      // Other instructions - handle with stack-relative for now
+      // Other instructions use stack-relative addressing
       break;
     }
 
@@ -206,8 +203,7 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
     // Remove the extra offset operand
     Inst.removeOperand(FIOperandNum + 1);
   } else {
-    // For other instructions, we may need different handling
-    // For now, just replace with immediate
+    // Default: replace frame index with computed stack offset
     Inst.getOperand(FIOperandNum).ChangeToImmediate(Offset);
   }
 

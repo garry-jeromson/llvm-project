@@ -137,10 +137,8 @@ void W65816DAGToDAGISel::Select(SDNode *N) {
     // Use LEA (Load Effective Address) pseudo to compute the address.
     int FI = cast<FrameIndexSDNode>(N)->getIndex();
     SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
-    // Create an ADDri to compute SP + offset. This will be lowered to proper
-    // stack address computation after frame lowering.
-    // For now, use a MOV16ri with the frame index which will be handled
-    // during frame lowering to become the actual address computation.
+    // Use LEA_fi pseudo to load the effective address of a stack slot.
+    // Frame lowering will convert this to actual SP + offset computation.
     MachineSDNode *LEA = CurDAG->getMachineNode(
         W65816::LEA_fi, DL, MVT::i16, TFI);
     ReplaceNode(N, LEA);

@@ -207,9 +207,6 @@ W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::VAEND, MVT::Other, Expand);
   setOperationAction(ISD::VACOPY, MVT::Other, Expand);
 
-  // Enable DAG combine for AND/OR/XOR to optimize 8-bit load + binop patterns
-  // This avoids register pressure issues when both operands are 8-bit loads
-  setTargetDAGCombine({ISD::AND, ISD::OR, ISD::XOR});
 }
 
 const char *W65816TargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -552,23 +549,8 @@ SDValue W65816TargetLowering::LowerLoad(SDValue Op, SelectionDAG &DAG) const {
 
   // Handle 8-bit extending loads (zext/sext from i8 to i16)
   if (MemVT == MVT::i8 && VT == MVT::i16) {
-    // The W65816 needs mode switching for 8-bit operations
-    // For now, we'll use a pseudo instruction that expands to:
-    //   SEP #$20    ; switch to 8-bit accumulator
-    //   LDA addr    ; load 8-bit value
-    //   REP #$20    ; switch back to 16-bit accumulator
-    //   AND #$00FF  ; mask to 8 bits (for zext) or sign extend
-    //
-    // For simplicity, we'll expand this in ISelDAGToDAG by creating
-    // a custom node. For now, return SDValue() to let default handling
-    // try, which will likely fail but at least lets us test the setup.
-    //
-    // Actually, let's try a different approach: load 16 bits and mask
-    // This avoids mode switching but may read an extra byte
-    // For memory-mapped I/O this could be problematic, but for general
-    // RAM it's fine.
-    //
-    // For now, we'll just let the DAG selection handle it with patterns
+    // Defer to pattern matching in W65816InstrInfo.td.
+    // The LDA8_* patterns handle mode switching (SEP/REP) for 8-bit loads.
     return SDValue();
   }
 
@@ -622,12 +604,8 @@ SDValue W65816TargetLowering::LowerStore(SDValue Op, SelectionDAG &DAG) const {
 
   // Handle truncating stores (i16 -> i8)
   if (MemVT == MVT::i8 && ValVT == MVT::i16) {
-    // For truncating stores, we need to:
-    //   SEP #$20    ; switch to 8-bit accumulator
-    //   STA addr    ; store 8-bit value (only low byte)
-    //   REP #$20    ; switch back to 16-bit accumulator
-    //
-    // For now, let the DAG selection handle it with patterns
+    // Defer to pattern matching in W65816InstrInfo.td.
+    // The STA8_* patterns handle mode switching (SEP/REP) for 8-bit stores.
     return SDValue();
   }
 
@@ -1343,106 +1321,14 @@ void W65816TargetLowering::ReplaceNodeResults(SDNode *N,
   }
 }
 
-/// Check if a node is a zext/anyext load from i8 to i16
-static bool isExtLoadFromI8(SDValue N, SDValue &BaseAddr, SDValue &Chain) {
-  // Check for extending load from i8
-  if (auto *LD = dyn_cast<LoadSDNode>(N)) {
-    if (LD->getMemoryVT() == MVT::i8 &&
-        LD->getExtensionType() != ISD::NON_EXTLOAD) {
-      BaseAddr = LD->getBasePtr();
-      Chain = LD->getChain();
-      return true;
-    }
-  }
-
-  // Also check for (and (load i8), 255) pattern which is equivalent to zextload
-  if (N.getOpcode() == ISD::AND) {
-    if (auto *C = dyn_cast<ConstantSDNode>(N.getOperand(1))) {
-      if (C->getZExtValue() == 255) {
-        SDValue Inner = N.getOperand(0);
-        if (auto *LD = dyn_cast<LoadSDNode>(Inner)) {
-          if (LD->getMemoryVT() == MVT::i8) {
-            BaseAddr = LD->getBasePtr();
-            Chain = LD->getChain();
-            return true;
-          }
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
-/// Check if an address is a simple global address (not indexed)
-static bool isSimpleGlobalAddr(SDValue Addr) {
-  if (Addr.getOpcode() == W65816ISD::WRAPPER) {
-    SDValue Inner = Addr.getOperand(0);
-    return Inner.getOpcode() == ISD::TargetGlobalAddress;
-  }
-  return false;
-}
-
 SDValue
 W65816TargetLowering::PerformDAGCombine(SDNode *N,
                                         DAGCombinerInfo &DCI) const {
   (void)DCI; // May be used in future combines
-  (void)N;   // Used in switch below
+  (void)N;   // May be used in future combines
 
-  switch (N->getOpcode()) {
-  default:
-    break;
-
-  case ISD::AND:
-  case ISD::OR:
-  case ISD::XOR: {
-    // Optimize (binop (zextload i8), (zextload i8)) pattern
-    // This avoids register pressure issues on the W65816 which only has
-    // A, X, Y registers and loads can only go to A.
-    //
-    // Instead of:
-    //   lda addr1 ; zext ; spill ; lda addr2 ; zext ; reload ; and
-    // We generate:
-    //   sep #32 ; lda addr1 ; binop addr2 ; rep #32 ; and #255
-    //
-    // This uses memory-operand form and only needs one register.
-
-    SDValue LHS = N->getOperand(0);
-    SDValue RHS = N->getOperand(1);
-
-    SDValue LHSAddr, LHSChain;
-    SDValue RHSAddr, RHSChain;
-
-    // Check if both operands are extending loads from i8
-    if (!isExtLoadFromI8(LHS, LHSAddr, LHSChain))
-      break;
-    if (!isExtLoadFromI8(RHS, RHSAddr, RHSChain))
-      break;
-
-    // Only handle simple global addresses for now (not indexed access)
-    // This is the common case for boolean variables
-    if (!isSimpleGlobalAddr(LHSAddr) || !isSimpleGlobalAddr(RHSAddr))
-      break;
-
-    // Create a new sequence that loads LHS, does the binop with RHS from memory,
-    // then zero-extends.
-    // The result will be selected in ISelDAGToDAG to generate the optimal code.
-    //
-    // For now, let the default pattern matching handle it.
-    // The key optimization is to ensure one operand stays as a load node.
-    //
-    // We can't easily restructure the DAG here because the loads may have
-    // side effects (chains). Instead, we rely on instruction selection
-    // to fold one load into the binop instruction.
-    //
-    // The actual fix is in instruction selection (ISelDAGToDAG.cpp) to
-    // recognize this pattern and generate proper code using AND_abs in 8-bit mode.
-
-    // For now, we don't transform but return early to avoid default handling
-    // causing issues. The instruction selector will handle this case.
-    break;
-  }
-  }
+  // DAG combines can be added here in the future.
+  // Note: 8-bit binop optimization is handled in ISelDAGToDAG.cpp.
 
   return SDValue();
 }

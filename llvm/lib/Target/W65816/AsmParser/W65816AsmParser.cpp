@@ -526,8 +526,9 @@ bool W65816AsmParser::parseParenExpr(OperandVector &Operands) {
   }
 
   // Plain (expr) - could be indirect DP or indirect addr (JMP)
+  // Parse as IndirectDP; the AsmMatcher validates operand size to
+  // distinguish between DP indirect ($xx) and absolute indirect ($xxxx).
   SMLoc E = getLexer().getLoc();
-  // Use IndirectDP for now - the AsmMatcher will validate size
   Operands.push_back(W65816Operand::createIndirect(
       W65816Operand::k_IndirectDP, Expr, S, E));
   return false;
