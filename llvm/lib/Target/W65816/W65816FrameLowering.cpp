@@ -187,6 +187,11 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
   if (StackSize == 0)
     return;
 
+  // W65816 has a 16-bit stack pointer, so frames cannot exceed 64KB
+  if (StackSize > 65535) {
+    report_fatal_error("W65816 stack frame too large (max 65535 bytes)");
+  }
+
   // Adjust the stack pointer by subtracting from it
   // W65816 doesn't have a direct subtract from SP instruction,
   // so we need to: TSX, TXA, SEC, SBC #imm, TAX, TXS

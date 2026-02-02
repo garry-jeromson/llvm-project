@@ -64,12 +64,26 @@ public:
   ArrayRef<const char *> getGCCRegNames() const override;
 
   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
-    return {};
+    static const TargetInfo::GCCRegAlias GCCRegAliases[] = {
+        {{"acc"}, "a"},  // Accumulator
+        {{"dp"}, "d"},   // Direct Page register
+    };
+    return llvm::ArrayRef(GCCRegAliases);
   }
 
   bool validateAsmConstraint(const char *&Name,
-                             TargetInfo::ConstraintInfo &info) const override {
-    // No target-specific constraints for now.
+                             TargetInfo::ConstraintInfo &Info) const override {
+    switch (*Name) {
+    case 'a': // Accumulator
+    case 'x': // X index register
+    case 'y': // Y index register
+      Info.setAllowsRegister();
+      return true;
+    case 'd': // Direct Page register
+    case 's': // Stack pointer
+      Info.setAllowsRegister();
+      return true;
+    }
     return false;
   }
 
