@@ -108,12 +108,10 @@ define i16 @load_byte_use_word() {
 @byte_array = global [16 x i8] zeroinitializer
 
 ; Test 8-bit load from global array with constant index
-; GISel uses indirect addressing for byte array access
+; ZEXT load folding combines the load+zext into a single LOAD8_ZEXT_GPR16_abs
 ; CHECK-LABEL: load_byte_array_const:
-; CHECK: lda #byte_array
 ; CHECK: sep #32
-; CHECK: ldy #5
-; CHECK: lda (${{[0-9]+}},s),y
+; CHECK: lda byte_array+5
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: rts

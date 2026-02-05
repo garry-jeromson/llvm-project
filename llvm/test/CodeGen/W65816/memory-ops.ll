@@ -12,10 +12,7 @@ target triple = "w65816-unknown-none"
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: inc_absolute:
-; GISel doesn't have memory INC optimization - uses load/inc/store
-; CHECK: lda counter
-; CHECK: inc a
-; CHECK: sta counter
+; CHECK: inc counter
 ; CHECK: rts
 define void @inc_absolute() {
   %val = load i16, ptr @counter
@@ -25,10 +22,7 @@ define void @inc_absolute() {
 }
 
 ; CHECK-LABEL: inc_dp:
-; GISel doesn't have memory INC optimization - uses load/inc/store
-; CHECK: lda dp_counter
-; CHECK: inc a
-; CHECK: sta dp_counter
+; CHECK: inc dp_counter
 ; CHECK: rts
 define void @inc_dp() {
   %val = load i16, ptr @dp_counter
@@ -42,11 +36,7 @@ define void @inc_dp() {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: dec_absolute:
-; GISel doesn't have memory DEC optimization - uses load/add -1/store
-; CHECK: lda counter
-; CHECK: clc
-; CHECK: adc #65535
-; CHECK: sta counter
+; CHECK: dec counter
 ; CHECK: rts
 define void @dec_absolute() {
   %val = load i16, ptr @counter
@@ -56,11 +46,7 @@ define void @dec_absolute() {
 }
 
 ; CHECK-LABEL: dec_absolute_via_add:
-; GISel doesn't have memory DEC optimization - uses load/add -1/store
-; CHECK: lda counter
-; CHECK: clc
-; CHECK: adc #65535
-; CHECK: sta counter
+; CHECK: dec counter
 ; CHECK: rts
 define void @dec_absolute_via_add() {
   %val = load i16, ptr @counter
@@ -74,10 +60,7 @@ define void @dec_absolute_via_add() {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: asl_absolute:
-; GISel doesn't have memory ASL optimization - uses load/asl/store
-; CHECK: lda counter
-; CHECK: asl a
-; CHECK: sta counter
+; CHECK: asl counter
 ; CHECK: rts
 define void @asl_absolute() {
   %val = load i16, ptr @counter
@@ -91,10 +74,7 @@ define void @asl_absolute() {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: lsr_absolute:
-; GISel doesn't have memory LSR optimization - uses load/lsr/store
-; CHECK: lda counter
-; CHECK: lsr a
-; CHECK: sta counter
+; CHECK: lsr counter
 ; CHECK: rts
 define void @lsr_absolute() {
   %val = load i16, ptr @counter
@@ -118,4 +98,25 @@ define i16 @inc_with_return() {
   %inc = add i16 %val, 1
   store i16 %inc, ptr @counter
   ret i16 %inc
+}
+
+;===----------------------------------------------------------------------===
+; Store Zero (STZ) optimization
+;===----------------------------------------------------------------------===
+
+; CHECK-LABEL: stz_absolute:
+; CHECK: stz counter
+; CHECK: rts
+define void @stz_absolute() {
+  store i16 0, ptr @counter
+  ret void
+}
+
+; STZ also works for DP globals (emitted as STZ_abs, assembler may optimize)
+; CHECK-LABEL: stz_dp:
+; CHECK: stz dp_counter
+; CHECK: rts
+define void @stz_dp() {
+  store i16 0, ptr @dp_counter
+  ret void
 }

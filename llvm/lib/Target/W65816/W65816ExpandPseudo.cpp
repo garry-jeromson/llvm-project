@@ -204,6 +204,7 @@ private:
   bool expandZEXT8_GPR16(Block &MBB, BlockIt MBBI);
   bool expandSEXT8_GPR16(Block &MBB, BlockIt MBBI);
   bool expandLOAD8_ZEXT_GPR16_abs(Block &MBB, BlockIt MBBI);
+  bool expandLOAD8_ZEXT_GPR16_sr(Block &MBB, BlockIt MBBI);
   bool expandLEA_fi(Block &MBB, BlockIt MBBI);
   bool expandMOV16ri(Block &MBB, BlockIt MBBI);
   bool expandMOV16ri_acc8(Block &MBB, BlockIt MBBI);
@@ -372,6 +373,8 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandSEXT8_GPR16(MBB, MBBI);
   case W65816::LOAD8_ZEXT_GPR16_abs:
     return expandLOAD8_ZEXT_GPR16_abs(MBB, MBBI);
+  case W65816::LOAD8_ZEXT_GPR16_sr:
+    return expandLOAD8_ZEXT_GPR16_sr(MBB, MBBI);
   case W65816::LEA_fi:
     return expandLEA_fi(MBB, MBBI);
   case W65816::MOV16ri:
@@ -3391,6 +3394,60 @@ bool W65816ExpandPseudo::expandLOAD8_ZEXT_GPR16_abs(Block &MBB, BlockIt MBBI) {
 
   // LDA addr - load 8-bit value (uses 8-bit mode opcode but same LDA_abs).
   BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_abs_m8), W65816::A).add(AddrOp);
+
+  // REP #$20 - switch back to 16-bit accumulator mode.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP)).addImm(0x20);
+
+  // AND #$00FF - zero-extend the 8-bit value.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  // Move result to destination.
+  if (DstReg == W65816::A) {
+    // Already in A.
+  } else if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLOAD8_ZEXT_GPR16_sr(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LOAD8_ZEXT_GPR16_sr $dst, $fi
+  // Load 8-bit value from stack-relative address, zero-extend to 16-bit.
+  //
+  // Expansion:
+  //   SEP #$20      ; Switch to 8-bit accumulator
+  //   LDA n,s       ; Load 8-bit value from stack
+  //   REP #$20      ; Switch back to 16-bit
+  //   AND #$00FF    ; Zero-extend (clear high byte)
+  //   (TAX/TAY/STA_dp if dst is not A)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  MachineOperand &FIOp = MI.getOperand(1);
+
+  // SEP #$20 - switch to 8-bit accumulator mode.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP)).addImm(0x20);
+
+  // LDA n,s - load 8-bit value from stack slot.
+  auto LoadInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_sr), W65816::A);
+  if (FIOp.isFI()) {
+    LoadInst.addFrameIndex(FIOp.getIndex());
+  } else {
+    LoadInst.add(FIOp);
+  }
 
   // REP #$20 - switch back to 16-bit accumulator mode.
   BuildMI(MBB, MBBI, DL, TII->get(W65816::REP)).addImm(0x20);

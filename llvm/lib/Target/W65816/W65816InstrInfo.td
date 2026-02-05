@@ -355,6 +355,14 @@ let Defs = [A, P], mayLoad = 1, hasSideEffects = 0 in {
                                     "# LOAD8_ZEXT_GPR16_abs $dst, $addr", []>;
 }
 
+// LOAD8_ZEXT_GPR16_sr - Load 8-bit from stack-relative address, zero-extend to 16-bit
+// Folds G_LOAD(i8, frame_index) + G_ZEXT(i16) into a single pseudo.
+// Expanded to: SEP #$20; LDA n,s; REP #$20; AND #$00FF; (+ transfer if needed)
+let Defs = [A, P], mayLoad = 1, hasSideEffects = 0 in {
+  def LOAD8_ZEXT_GPR16_sr : Pseudo<(outs GPR16:$dst), (ins i16imm:$fi),
+                                    "# LOAD8_ZEXT_GPR16_sr $dst, $fi", []>;
+}
+
 // ZEXT8_GPR16 - Zero-extend 8-bit value to 16-bit in any GPR16 register
 // The key difference from AND16rr: NO tied operand between src and dst.
 // This allows the register allocator to place src and dst in different
@@ -1825,17 +1833,7 @@ let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
 // Select Pseudo Instructions
 //===----------------------------------------------------------------------===//
 
-// Select16 pseudo - expands to a diamond control flow pattern
-// Operands: dst, trueVal, falseVal, condCode
-// For unsigned/equality conditions, uses usesCustomInserter for early expansion
-// Note: condCode uses i16 because i8 is not a legal type in the backend
-let usesCustomInserter = 1, Uses = [P] in {
-  def Select16 : Pseudo<(outs GPR16:$dst),
-                        (ins GPR16:$trueVal, GPR16:$falseVal, i16imm:$cc),
-                        "# Select16 $dst, $trueVal, $falseVal, $cc", []>;
-}
-
-// Signed select pseudos - expanded in ExpandPseudo pass (after branch folding)
+// Select pseudos - expanded in ExpandPseudo pass (after branch folding)
 // These require multi-instruction sequences for proper N!=V or N==V checks
 let Uses = [P] in {
   def Select16_SLT : Pseudo<(outs GPR16:$dst),
@@ -1858,8 +1856,6 @@ let Uses = [P] in {
                             (ins GPR16:$trueVal, GPR16:$falseVal),
                             "# Select16_ULE $dst, $trueVal, $falseVal", []>;
   // Simple condition selects (single branch instruction, expanded in ExpandPseudo)
-  // Used by GlobalISel since the generic Select16 uses usesCustomInserter
-  // which only works in SelectionDAG.
   def Select16_EQ : Pseudo<(outs GPR16:$dst),
                             (ins GPR16:$trueVal, GPR16:$falseVal),
                             "# Select16_EQ $dst, $trueVal, $falseVal", []>;

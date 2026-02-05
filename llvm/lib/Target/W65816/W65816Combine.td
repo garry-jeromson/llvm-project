@@ -21,6 +21,9 @@ def double_neg_fold: GICombineRule<
   (apply (GIReplaceReg $dst, $src))
 >;
 
+// Note: zext_trunc_fold (G_ZEXT(G_TRUNC(x)) → x when bits known zero) is
+// already included in all_combines. No custom rule needed.
+
 def W65816PreLegalizerCombiner: GICombiner<
   "W65816PreLegalizerCombinerImpl", [all_combines, double_neg_fold]> {
 }

@@ -79,10 +79,7 @@ define i16 @test_bswap_add(i16 %a, i16 %b) {
 @counter = global i16 0
 
 ; CHECK-LABEL: test_inc_memory:
-; GISel doesn't have memory INC optimization - uses load/inc/store
-; CHECK: lda global_var
-; CHECK: inc a
-; CHECK: sta global_var
+; CHECK: inc global_var
 ; CHECK: rts
 define void @test_inc_memory() {
   %val = load i16, ptr @global_var
@@ -92,11 +89,7 @@ define void @test_inc_memory() {
 }
 
 ; CHECK-LABEL: test_dec_memory:
-; GISel doesn't have memory DEC optimization - uses load/add -1/store
-; CHECK: lda global_var
-; CHECK: clc
-; CHECK: adc #65535
-; CHECK: sta global_var
+; CHECK: dec global_var
 ; CHECK: rts
 define void @test_dec_memory() {
   %val = load i16, ptr @global_var

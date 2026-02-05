@@ -25,10 +25,6 @@ public:
   explicit W65816TargetLowering(const TargetMachine &TM,
                                 const W65816Subtarget &STI);
 
-  MachineBasicBlock *
-  EmitInstrWithCustomInserter(MachineInstr &MI,
-                              MachineBasicBlock *MBB) const override;
-
   MVT getScalarShiftAmountTy(const DataLayout &DL, EVT VT) const override {
     return MVT::i16;
   }
@@ -44,9 +40,6 @@ public:
                          EVT VT) const override {
     return MVT::i16;
   }
-
-private:
-  const W65816Subtarget &Subtarget;
 };
 
 } // namespace llvm

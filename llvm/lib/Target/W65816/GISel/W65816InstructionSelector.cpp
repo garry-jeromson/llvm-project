@@ -52,6 +52,8 @@ private:
   bool selectGlobalValue(MachineInstr &I) const;
   bool selectLoad(MachineInstr &I) const;
   bool selectStore(MachineInstr &I) const;
+  bool trySelectMemoryOp(MachineInstr &I) const;
+  bool isConstantZero(Register Reg, MachineRegisterInfo &MRI) const;
   bool selectLibcallBinOp(MachineInstr &I, const char *LibcallName) const;
   bool selectBinOp(MachineInstr &I) const;
   bool selectZExt(MachineInstr &I) const;
@@ -112,6 +114,145 @@ W65816InstructionSelector::lookThroughIntToPtr(Register Reg,
   if (Def->getOpcode() == TargetOpcode::G_INTTOPTR)
     return MRI.getVRegDef(Def->getOperand(1).getReg());
   return Def;
+}
+
+bool W65816InstructionSelector::isConstantZero(Register Reg,
+                                               MachineRegisterInfo &MRI) const {
+  MachineInstr *Def = MRI.getVRegDef(Reg);
+  if (!Def)
+    return false;
+  if (Def->getOpcode() != TargetOpcode::G_CONSTANT)
+    return false;
+  auto *CI = Def->getOperand(1).getCImm();
+  return CI && CI->isZero();
+}
+
+/// Check if a G_GLOBAL_VALUE address matches between two instructions.
+/// Returns the GlobalValue and offset if they match, nullptr otherwise.
+static bool isSameGlobalAddress(MachineInstr *Def1, MachineInstr *Def2) {
+  if (!Def1 || !Def2)
+    return false;
+  if (Def1->getOpcode() != TargetOpcode::G_GLOBAL_VALUE ||
+      Def2->getOpcode() != TargetOpcode::G_GLOBAL_VALUE)
+    return false;
+  return Def1->getOperand(1).getGlobal() == Def2->getOperand(1).getGlobal() &&
+         Def1->getOperand(1).getOffset() == Def2->getOperand(1).getOffset();
+}
+
+/// Check if a constant address matches between two instructions.
+static bool isSameConstantAddress(MachineInstr *Def1, MachineInstr *Def2) {
+  if (!Def1 || !Def2)
+    return false;
+  if (Def1->getOpcode() != TargetOpcode::G_CONSTANT ||
+      Def2->getOpcode() != TargetOpcode::G_CONSTANT)
+    return false;
+  auto *CI1 = Def1->getOperand(1).getCImm();
+  auto *CI2 = Def2->getOperand(1).getCImm();
+  return CI1 && CI2 && CI1->getZExtValue() == CI2->getZExtValue();
+}
+
+bool W65816InstructionSelector::trySelectMemoryOp(MachineInstr &I) const {
+  // Try to fold load-modify-store patterns into single memory operations:
+  //   G_STORE(G_ADD(G_LOAD(addr), 1), addr)   → INC_abs
+  //   G_STORE(G_ADD(G_LOAD(addr), -1), addr)  → DEC_abs
+  //   G_STORE(G_SUB(G_LOAD(addr), 1), addr)   → DEC_abs
+  //   G_STORE(G_SHL(G_LOAD(addr), 1), addr)   → ASL_abs
+  //   G_STORE(G_LSHR(G_LOAD(addr), 1), addr)  → LSR_abs
+  MachineBasicBlock &MBB = *I.getParent();
+  MachineFunction &MF = *MBB.getParent();
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+
+  Register ValReg = I.getOperand(0).getReg();
+  Register StoreAddrReg = I.getOperand(1).getReg();
+
+  // Only handle 16-bit stores.
+  LLT ValTy = MRI.getType(ValReg);
+  if (ValTy.getSizeInBits() != 16)
+    return false;
+
+  // The value must be defined by an arithmetic op.
+  MachineInstr *ValDef = MRI.getVRegDef(ValReg);
+  if (!ValDef)
+    return false;
+
+  unsigned ValOpc = ValDef->getOpcode();
+  if (ValOpc != TargetOpcode::G_ADD && ValOpc != TargetOpcode::G_SUB &&
+      ValOpc != TargetOpcode::G_SHL && ValOpc != TargetOpcode::G_LSHR)
+    return false;
+
+  // The arithmetic result must have exactly one use (the store).
+  if (!MRI.hasOneNonDBGUse(ValReg))
+    return false;
+
+  Register ArithSrc = ValDef->getOperand(1).getReg();
+  Register ArithConst = ValDef->getOperand(2).getReg();
+
+  // The constant operand must be 1 (or -1 for G_ADD → DEC).
+  MachineInstr *ConstDef = MRI.getVRegDef(ArithConst);
+  if (!ConstDef || ConstDef->getOpcode() != TargetOpcode::G_CONSTANT)
+    return false;
+  auto *CI = ConstDef->getOperand(1).getCImm();
+  if (!CI)
+    return false;
+  int64_t ConstVal = CI->getSExtValue();
+
+  // Determine the memory operation.
+  unsigned MemOpc = 0;
+  if (ValOpc == TargetOpcode::G_ADD && ConstVal == 1)
+    MemOpc = W65816::INC_abs;
+  else if (ValOpc == TargetOpcode::G_ADD &&
+           (ConstVal == -1 || ConstVal == 65535))
+    MemOpc = W65816::DEC_abs;
+  else if (ValOpc == TargetOpcode::G_SUB && ConstVal == 1)
+    MemOpc = W65816::DEC_abs;
+  else if (ValOpc == TargetOpcode::G_SHL && ConstVal == 1)
+    MemOpc = W65816::ASL_abs;
+  else if (ValOpc == TargetOpcode::G_LSHR && ConstVal == 1)
+    MemOpc = W65816::LSR_abs;
+  else
+    return false;
+
+  // The source of the arithmetic must be a G_LOAD.
+  MachineInstr *LoadDef = MRI.getVRegDef(ArithSrc);
+  if (!LoadDef || LoadDef->getOpcode() != TargetOpcode::G_LOAD)
+    return false;
+
+  // The load result must have exactly one use (the arithmetic op).
+  if (!MRI.hasOneNonDBGUse(ArithSrc))
+    return false;
+
+  // The load and store must use the same address.
+  Register LoadAddrReg = LoadDef->getOperand(1).getReg();
+  MachineInstr *StoreAddrDef = lookThroughIntToPtr(StoreAddrReg, MRI);
+  MachineInstr *LoadAddrDef = lookThroughIntToPtr(LoadAddrReg, MRI);
+
+  if (!StoreAddrDef || !LoadAddrDef)
+    return false;
+
+  // Check if addresses match (global value or constant address).
+  if (!isSameGlobalAddress(StoreAddrDef, LoadAddrDef) &&
+      !isSameConstantAddress(StoreAddrDef, LoadAddrDef))
+    return false;
+
+  // Build the address operand.
+  if (StoreAddrDef->getOpcode() == TargetOpcode::G_GLOBAL_VALUE) {
+    const GlobalValue *GV = StoreAddrDef->getOperand(1).getGlobal();
+    int64_t Offset = StoreAddrDef->getOperand(1).getOffset();
+
+    BuildMI(MBB, I, I.getDebugLoc(), TII.get(MemOpc))
+        .addGlobalAddress(GV, Offset);
+  } else {
+    // Constant address.
+    auto *AddrCI = StoreAddrDef->getOperand(1).getCImm();
+    BuildMI(MBB, I, I.getDebugLoc(), TII.get(MemOpc))
+        .addImm(AddrCI->getZExtValue());
+  }
+
+  // Erase the entire load-modify-store chain.
+  I.eraseFromParent();
+  ValDef->eraseFromParent();
+  LoadDef->eraseFromParent();
+  return true;
 }
 
 bool W65816InstructionSelector::selectGlobalValue(MachineInstr &I) const {
@@ -472,6 +613,10 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
   MachineFunction &MF = *MBB.getParent();
   MachineRegisterInfo &MRI = MF.getRegInfo();
 
+  // Try memory operation combining (INC/DEC/ASL/LSR on memory) first.
+  if (trySelectMemoryOp(I))
+    return true;
+
   Register ValReg = I.getOperand(0).getReg();
   Register AddrReg = I.getOperand(1).getReg();
 
@@ -490,6 +635,16 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
   if (AddrDef->getOpcode() == TargetOpcode::G_CONSTANT) {
     auto *CI = AddrDef->getOperand(1).getCImm();
     if (CI) {
+      // STZ optimization: store zero directly without loading into a register.
+      if (MemSize == 16 && isConstantZero(ValReg, MRI)) {
+        auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::STZ_abs))
+                         .addImm(CI->getZExtValue());
+        if (MMO)
+          NewMI.addMemOperand(MMO);
+        I.eraseFromParent();
+        return true;
+      }
+
       unsigned Opc;
       if (MemSize == 16)
         Opc = W65816::STORE_GPR16_abs;
@@ -514,6 +669,19 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
 
   // Store to global address (avoids ACC16 constraint).
   if (AddrDef->getOpcode() == TargetOpcode::G_GLOBAL_VALUE) {
+    const GlobalValue *GV = AddrDef->getOperand(1).getGlobal();
+    int64_t Offset = AddrDef->getOperand(1).getOffset();
+
+    // STZ optimization: store zero directly without loading into a register.
+    if (MemSize == 16 && isConstantZero(ValReg, MRI)) {
+      auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::STZ_abs))
+                       .addGlobalAddress(GV, Offset);
+      if (MMO)
+        NewMI.addMemOperand(MMO);
+      I.eraseFromParent();
+      return true;
+    }
+
     unsigned Opc;
     if (MemSize == 16)
       Opc = W65816::STORE_GPR16_abs;
@@ -521,9 +689,6 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
       Opc = W65816::STA8_abs;
     else
       return false;
-
-    const GlobalValue *GV = AddrDef->getOperand(1).getGlobal();
-    int64_t Offset = AddrDef->getOperand(1).getOffset();
 
     auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opc))
                      .addReg(ValReg)
@@ -576,6 +741,20 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
     // Global + constant offset → store to absolute address.
     if (BaseDef->getOpcode() == TargetOpcode::G_GLOBAL_VALUE &&
         OffsetDef->getOpcode() == TargetOpcode::G_CONSTANT) {
+      const GlobalValue *GV = BaseDef->getOperand(1).getGlobal();
+      int64_t BaseOffset = BaseDef->getOperand(1).getOffset();
+      int64_t ConstOffset = OffsetDef->getOperand(1).getCImm()->getSExtValue();
+
+      // STZ optimization: store zero directly.
+      if (MemSize == 16 && isConstantZero(ValReg, MRI)) {
+        auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::STZ_abs))
+                         .addGlobalAddress(GV, BaseOffset + ConstOffset);
+        if (MMO)
+          NewMI.addMemOperand(MMO);
+        I.eraseFromParent();
+        return true;
+      }
+
       unsigned Opc;
       if (MemSize == 16)
         Opc = W65816::STORE_GPR16_abs;
@@ -583,10 +762,6 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
         Opc = W65816::STA8_abs;
       else
         return false;
-
-      const GlobalValue *GV = BaseDef->getOperand(1).getGlobal();
-      int64_t BaseOffset = BaseDef->getOperand(1).getOffset();
-      int64_t ConstOffset = OffsetDef->getOperand(1).getCImm()->getSExtValue();
 
       auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opc))
                        .addReg(ValReg)
@@ -753,6 +928,10 @@ bool W65816InstructionSelector::selectZExt(MachineInstr &I) const {
       Register LoadAddrReg = SrcDef->getOperand(1).getReg();
       MachineInstr *LoadAddrDef = lookThroughIntToPtr(LoadAddrReg, MRI);
 
+      MachineMemOperand *MMO = nullptr;
+      if (SrcDef->memoperands_begin() != SrcDef->memoperands_end())
+        MMO = *SrcDef->memoperands_begin();
+
       if (LoadAddrDef &&
           LoadAddrDef->getOpcode() == TargetOpcode::G_GLOBAL_VALUE) {
         const GlobalValue *GV = LoadAddrDef->getOperand(1).getGlobal();
@@ -762,9 +941,6 @@ bool W65816InstructionSelector::selectZExt(MachineInstr &I) const {
                              TII.get(W65816::LOAD8_ZEXT_GPR16_abs), DstReg)
                          .addGlobalAddress(GV, Offset);
 
-        MachineMemOperand *MMO = nullptr;
-        if (SrcDef->memoperands_begin() != SrcDef->memoperands_end())
-          MMO = *SrcDef->memoperands_begin();
         if (MMO)
           NewMI.addMemOperand(MMO);
 
@@ -775,6 +951,56 @@ bool W65816InstructionSelector::selectZExt(MachineInstr &I) const {
         I.eraseFromParent();
         SrcDef->eraseFromParent();
         return true;
+      }
+
+      // Frame index → LOAD8_ZEXT_GPR16_sr pseudo.
+      if (LoadAddrDef &&
+          LoadAddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX) {
+        int FI = LoadAddrDef->getOperand(1).getIndex();
+
+        auto NewMI = BuildMI(MBB, I, I.getDebugLoc(),
+                             TII.get(W65816::LOAD8_ZEXT_GPR16_sr), DstReg)
+                         .addFrameIndex(FI);
+
+        if (MMO)
+          NewMI.addMemOperand(MMO);
+
+        if (!constrainSelectedInstRegOperands(*NewMI, TII, TRI, RBI))
+          return false;
+
+        I.eraseFromParent();
+        SrcDef->eraseFromParent();
+        return true;
+      }
+
+      // PTR_ADD(global, const) → LOAD8_ZEXT_GPR16_abs with combined offset.
+      if (LoadAddrDef && LoadAddrDef->getOpcode() == TargetOpcode::G_PTR_ADD) {
+        Register BaseReg = LoadAddrDef->getOperand(1).getReg();
+        Register OffReg = LoadAddrDef->getOperand(2).getReg();
+        MachineInstr *BaseDef = MRI.getVRegDef(BaseReg);
+        MachineInstr *OffDef = MRI.getVRegDef(OffReg);
+
+        if (BaseDef && OffDef &&
+            BaseDef->getOpcode() == TargetOpcode::G_GLOBAL_VALUE &&
+            OffDef->getOpcode() == TargetOpcode::G_CONSTANT) {
+          const GlobalValue *GV = BaseDef->getOperand(1).getGlobal();
+          int64_t BaseOffset = BaseDef->getOperand(1).getOffset();
+          int64_t ConstOffset = OffDef->getOperand(1).getCImm()->getSExtValue();
+
+          auto NewMI = BuildMI(MBB, I, I.getDebugLoc(),
+                               TII.get(W65816::LOAD8_ZEXT_GPR16_abs), DstReg)
+                           .addGlobalAddress(GV, BaseOffset + ConstOffset);
+
+          if (MMO)
+            NewMI.addMemOperand(MMO);
+
+          if (!constrainSelectedInstRegOperands(*NewMI, TII, TRI, RBI))
+            return false;
+
+          I.eraseFromParent();
+          SrcDef->eraseFromParent();
+          return true;
+        }
       }
     }
 
