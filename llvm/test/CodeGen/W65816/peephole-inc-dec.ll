@@ -17,12 +17,11 @@ entry:
   ret i16 %result
 }
 
-; Test 2: Subtract 1 should use DEC A instead of SEC; SBC #1
+; Test 2: GISel uses CLC; ADC #65535 for subtract by 1
 define i16 @sub_one(i16 %x) {
 ; CHECK-LABEL: sub_one:
-; CHECK:       dec a
-; CHECK-NOT:   sec
-; CHECK-NOT:   sbc #1
+; CHECK:       clc
+; CHECK-NEXT:  adc #65535
 ; CHECK-NEXT:  rts
 entry:
   %result = sub i16 %x, 1

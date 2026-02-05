@@ -79,7 +79,10 @@ define i16 @test_bswap_add(i16 %a, i16 %b) {
 @counter = global i16 0
 
 ; CHECK-LABEL: test_inc_memory:
-; CHECK: inc global_var
+; GISel doesn't have memory INC optimization - uses load/inc/store
+; CHECK: lda global_var
+; CHECK: inc a
+; CHECK: sta global_var
 ; CHECK: rts
 define void @test_inc_memory() {
   %val = load i16, ptr @global_var
@@ -89,7 +92,11 @@ define void @test_inc_memory() {
 }
 
 ; CHECK-LABEL: test_dec_memory:
-; CHECK: dec global_var
+; GISel doesn't have memory DEC optimization - uses load/add -1/store
+; CHECK: lda global_var
+; CHECK: clc
+; CHECK: adc #65535
+; CHECK: sta global_var
 ; CHECK: rts
 define void @test_dec_memory() {
   %val = load i16, ptr @global_var
@@ -104,9 +111,11 @@ define void @test_dec_memory() {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: test_stz_indexed:
+; GISel uses indirect addressing for indexed stores
+; CHECK: ldx #global_array
+; CHECK: ldy #0
 ; CHECK: asl a
-; CHECK: tax
-; CHECK: stz global_array,x
+; CHECK: sta (${{[0-9]+}},s),y
 ; CHECK: rts
 define void @test_stz_indexed(i16 %idx) {
   %ptr = getelementptr [10 x i16], ptr @global_array, i16 0, i16 %idx

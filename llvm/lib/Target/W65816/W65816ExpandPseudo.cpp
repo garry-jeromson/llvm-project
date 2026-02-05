@@ -91,6 +91,83 @@ private:
     return BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(Opcode), DstReg);
   }
 
+  /// Emit code to copy any register (including imaginary) to A.
+  /// For A: no-op. For X: TXA. For Y: TYA. For imag: LDA_dp.
+  void emitCopyToA(Block &MBB, BlockIt MBBI, Register SrcReg) {
+    if (SrcReg == W65816::A)
+      return;
+    if (SrcReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXA);
+      return;
+    }
+    if (SrcReg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TYA);
+      return;
+    }
+    if (W65816::IMAG16RegClass.contains(SrcReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+      BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(W65816::LDA_dp),
+              W65816::A)
+          .addImm(DPAddr);
+      return;
+    }
+    // Fallback (shouldn't happen after RA)
+    BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(TargetOpcode::COPY),
+            W65816::A)
+        .addReg(SrcReg);
+  }
+
+  /// Emit code to copy A to any register (including imaginary).
+  /// For A: no-op. For X: TAX. For Y: TAY. For imag: STA_dp.
+  void emitCopyFromA(Block &MBB, BlockIt MBBI, Register DstReg) {
+    if (DstReg == W65816::A)
+      return;
+    if (DstReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TAX);
+      return;
+    }
+    if (DstReg == W65816::Y) {
+      buildMI(MBB, MBBI, W65816::TAY);
+      return;
+    }
+    if (W65816::IMAG16RegClass.contains(DstReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+      BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(DPAddr);
+      return;
+    }
+    BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(TargetOpcode::COPY),
+            DstReg)
+        .addReg(W65816::A);
+  }
+
+  /// Emit code to copy any register (including imaginary) to Y.
+  /// For Y: no-op. For X: TXY. For A: TAY. For imag: LDA_dp + TAY.
+  void emitCopyToY(Block &MBB, BlockIt MBBI, Register SrcReg) {
+    if (SrcReg == W65816::Y)
+      return;
+    if (SrcReg == W65816::X) {
+      buildMI(MBB, MBBI, W65816::TXY);
+      return;
+    }
+    if (SrcReg == W65816::A) {
+      buildMI(MBB, MBBI, W65816::TAY);
+      return;
+    }
+    if (W65816::IMAG16RegClass.contains(SrcReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+      BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(W65816::LDA_dp),
+              W65816::A)
+          .addImm(DPAddr);
+      buildMI(MBB, MBBI, W65816::TAY);
+      return;
+    }
+    BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(TargetOpcode::COPY),
+            W65816::Y)
+        .addReg(SrcReg);
+  }
+
   bool expandRETW(Block &MBB, BlockIt MBBI);
   bool expandADD16rr(Block &MBB, BlockIt MBBI);
   bool expandADD16ri(Block &MBB, BlockIt MBBI);
@@ -103,8 +180,11 @@ private:
   bool expandSRL16ri(Block &MBB, BlockIt MBBI);
   bool expandSRA16ri(Block &MBB, BlockIt MBBI);
   bool expandAND16rr(Block &MBB, BlockIt MBBI);
+  bool expandAND16ri(Block &MBB, BlockIt MBBI);
   bool expandOR16rr(Block &MBB, BlockIt MBBI);
+  bool expandOR16ri(Block &MBB, BlockIt MBBI);
   bool expandXOR16rr(Block &MBB, BlockIt MBBI);
+  bool expandXOR16ri(Block &MBB, BlockIt MBBI);
   bool expandSHL16rv(Block &MBB, BlockIt MBBI);
   bool expandSRL16rv(Block &MBB, BlockIt MBBI);
   bool expandSRA16rv(Block &MBB, BlockIt MBBI);
@@ -119,6 +199,11 @@ private:
   bool expandSTAindirectIdx(Block &MBB, BlockIt MBBI);
   bool expandRELOAD_GPR16(Block &MBB, BlockIt MBBI);
   bool expandSPILL_GPR16(Block &MBB, BlockIt MBBI);
+  bool expandLOAD_GPR16_abs(Block &MBB, BlockIt MBBI);
+  bool expandSTORE_GPR16_abs(Block &MBB, BlockIt MBBI);
+  bool expandZEXT8_GPR16(Block &MBB, BlockIt MBBI);
+  bool expandSEXT8_GPR16(Block &MBB, BlockIt MBBI);
+  bool expandLOAD8_ZEXT_GPR16_abs(Block &MBB, BlockIt MBBI);
   bool expandLEA_fi(Block &MBB, BlockIt MBBI);
   bool expandMOV16ri(Block &MBB, BlockIt MBBI);
   bool expandMOV16ri_acc8(Block &MBB, BlockIt MBBI);
@@ -126,6 +211,7 @@ private:
   bool expandDEC16(Block &MBB, BlockIt MBBI);
   bool expandSelect16Signed(Block &MBB, BlockIt MBBI, unsigned CondCode);
   bool expandSelect16Unsigned(Block &MBB, BlockIt MBBI, unsigned CondCode);
+  bool expandSelect16Simple(Block &MBB, BlockIt MBBI, unsigned BranchOpcode);
   bool expandLDA8_abs(Block &MBB, BlockIt MBBI);
   bool expandLDA8_sr(Block &MBB, BlockIt MBBI);
   bool expandAND8_abs(Block &MBB, BlockIt MBBI);
@@ -238,10 +324,16 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandSRA16ri(MBB, MBBI);
   case W65816::AND16rr:
     return expandAND16rr(MBB, MBBI);
+  case W65816::AND16ri:
+    return expandAND16ri(MBB, MBBI);
   case W65816::OR16rr:
     return expandOR16rr(MBB, MBBI);
+  case W65816::OR16ri:
+    return expandOR16ri(MBB, MBBI);
   case W65816::XOR16rr:
     return expandXOR16rr(MBB, MBBI);
+  case W65816::XOR16ri:
+    return expandXOR16ri(MBB, MBBI);
   case W65816::SHL16rv:
     return expandSHL16rv(MBB, MBBI);
   case W65816::SRL16rv:
@@ -270,6 +362,16 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandRELOAD_GPR16(MBB, MBBI);
   case W65816::SPILL_GPR16:
     return expandSPILL_GPR16(MBB, MBBI);
+  case W65816::LOAD_GPR16_abs:
+    return expandLOAD_GPR16_abs(MBB, MBBI);
+  case W65816::STORE_GPR16_abs:
+    return expandSTORE_GPR16_abs(MBB, MBBI);
+  case W65816::ZEXT8_GPR16:
+    return expandZEXT8_GPR16(MBB, MBBI);
+  case W65816::SEXT8_GPR16:
+    return expandSEXT8_GPR16(MBB, MBBI);
+  case W65816::LOAD8_ZEXT_GPR16_abs:
+    return expandLOAD8_ZEXT_GPR16_abs(MBB, MBBI);
   case W65816::LEA_fi:
     return expandLEA_fi(MBB, MBBI);
   case W65816::MOV16ri:
@@ -292,6 +394,14 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandSelect16Unsigned(MBB, MBBI, W65816CC::COND_UGT);
   case W65816::Select16_ULE:
     return expandSelect16Unsigned(MBB, MBBI, W65816CC::COND_ULE);
+  case W65816::Select16_EQ:
+    return expandSelect16Simple(MBB, MBBI, W65816::BEQ);
+  case W65816::Select16_NE:
+    return expandSelect16Simple(MBB, MBBI, W65816::BNE);
+  case W65816::Select16_CC:
+    return expandSelect16Simple(MBB, MBBI, W65816::BCC);
+  case W65816::Select16_CS:
+    return expandSelect16Simple(MBB, MBBI, W65816::BCS);
   case W65816::LDA8_abs:
     return expandLDA8_abs(MBB, MBBI);
   case W65816::LDA8_sr:
@@ -448,6 +558,24 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
   Register Src1Reg = MI.getOperand(1).getReg();
   Register Src2Reg = MI.getOperand(2).getReg();
 
+  // Check if A needs to be preserved across this expansion.
+  // The expansion always goes through A, but A is not in Defs (to avoid
+  // register pressure on the 3-register architecture). If A is live after
+  // this instruction and DstReg != A, we must save/restore A.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
   // Addition is commutative, so if src2 is in A and src1 is not, swap them.
   // This avoids clobbering src2 when moving src1 to A.
   if (Src2Reg == W65816::A && Src1Reg != W65816::A) {
@@ -514,6 +642,11 @@ bool W65816ExpandPseudo::expandADD16rr(Block &MBB, BlockIt MBBI) {
   }
   // If DstReg == A, result is already there
 
+  // Restore A if we saved it
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
+
   MI.eraseFromParent();
   return true;
 }
@@ -529,17 +662,31 @@ bool W65816ExpandPseudo::expandADD16ri(Block &MBB, BlockIt MBBI) {
   Register SrcReg = MI.getOperand(1).getReg();
   int64_t Imm = MI.getOperand(2).getImm();
 
+  // Check if A needs to be preserved across this expansion.
+  // The expansion goes through A, so if A is live and dst != A, save it.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A && SrcReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
   // First, ensure src is in A
   if (SrcReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
   } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
-    // Load from imaginary register (DP location)
     unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
   }
-  // If SrcReg == A, it's already there
 
   // Clear carry before addition
   buildMI(MBB, MBBI, W65816::CLC);
@@ -553,13 +700,15 @@ bool W65816ExpandPseudo::expandADD16ri(Block &MBB, BlockIt MBBI) {
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
   } else if (W65816::IMAG16RegClass.contains(DstReg)) {
-    // Store result to imaginary register (DP location)
     unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
         .addImm(DPAddr);
   }
-  // If DstReg == A, result is already there
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -576,6 +725,21 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
   Register DstReg = MI.getOperand(0).getReg();
   Register Src1Reg = MI.getOperand(1).getReg();
   Register Src2Reg = MI.getOperand(2).getReg();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
 
   // IMPORTANT: If src2 is in A and we need to move src1 to A,
   // we must save src2 first before it gets overwritten!
@@ -656,6 +820,11 @@ bool W65816ExpandPseudo::expandSUB16rr(Block &MBB, BlockIt MBBI) {
         .addImm(DPAddr);
   }
 
+  // Restore A if we saved it
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
+
   MI.eraseFromParent();
   return true;
 }
@@ -671,17 +840,30 @@ bool W65816ExpandPseudo::expandSUB16ri(Block &MBB, BlockIt MBBI) {
   Register SrcReg = MI.getOperand(1).getReg();
   int64_t Imm = MI.getOperand(2).getImm();
 
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A && SrcReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
   // First, ensure src is in A
   if (SrcReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
   } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
-    // Load from imaginary register (DP location)
     unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
   }
-  // If SrcReg == A, it's already there
 
   // Set carry before subtraction (borrow = !carry)
   buildMI(MBB, MBBI, W65816::SEC);
@@ -695,13 +877,15 @@ bool W65816ExpandPseudo::expandSUB16ri(Block &MBB, BlockIt MBBI) {
   } else if (DstReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TAY);
   } else if (W65816::IMAG16RegClass.contains(DstReg)) {
-    // Store result to imaginary register (DP location)
     unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
         .addImm(DPAddr);
   }
-  // If DstReg == A, result is already there
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -1306,6 +1490,21 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
   Register Src1Reg = MI.getOperand(1).getReg();
   Register Src2Reg = MI.getOperand(2).getReg();
 
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
   // First, ensure src1 is in A
   if (Src1Reg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
@@ -1358,6 +1557,71 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
   }
   // If DstReg == A, result is already there
 
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandAND16ri(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // AND16ri $dst, $src, $imm
+  // Expand to: AND #imm (with transfers as needed)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+  int64_t Imm = MI.getOperand(2).getImm();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A && SrcReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
+  // First, ensure src is in A
+  if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+  }
+
+  // AND immediate
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(Imm);
+
+  // Move result to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
+
   MI.eraseFromParent();
   return true;
 }
@@ -1374,6 +1638,21 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
   Register DstReg = MI.getOperand(0).getReg();
   Register Src1Reg = MI.getOperand(1).getReg();
   Register Src2Reg = MI.getOperand(2).getReg();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
 
   // First, ensure src1 is in A
   if (Src1Reg == W65816::X) {
@@ -1427,6 +1706,71 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
   }
   // If DstReg == A, result is already there
 
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandOR16ri(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // OR16ri $dst, $src, $imm
+  // Expand to: ORA #imm (with transfers as needed)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+  int64_t Imm = MI.getOperand(2).getImm();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A && SrcReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
+  // First, ensure src is in A
+  if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+  }
+
+  // ORA immediate
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(Imm);
+
+  // Move result to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
+
   MI.eraseFromParent();
   return true;
 }
@@ -1443,6 +1787,21 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
   Register DstReg = MI.getOperand(0).getReg();
   Register Src1Reg = MI.getOperand(1).getReg();
   Register Src2Reg = MI.getOperand(2).getReg();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
 
   // First, ensure src1 is in A
   if (Src1Reg == W65816::X) {
@@ -1495,6 +1854,71 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
         .addImm(DPAddr);
   }
   // If DstReg == A, result is already there
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandXOR16ri(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // XOR16ri $dst, $src, $imm
+  // Expand to: EOR #imm (with transfers as needed)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+  int64_t Imm = MI.getOperand(2).getImm();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A && SrcReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
+  // First, ensure src is in A
+  if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+  }
+
+  // EOR immediate
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(Imm);
+
+  // Move result to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -1989,7 +2413,11 @@ bool W65816ExpandPseudo::expandLDAindirect(Block &MBB, BlockIt MBBI) {
 
   // Step 1: Store the pointer to the stack slot
   // Need to get ptr to A first, then STA to stack
-  if (PtrReg == W65816::X) {
+  if (W65816::IMAG16RegClass.contains(PtrReg)) {
+    // Imaginary register - load from Direct Page to A
+    unsigned DPAddr = getImaginaryRegDPAddr(PtrReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+  } else if (PtrReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (PtrReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
@@ -2259,9 +2687,47 @@ bool W65816ExpandPseudo::expandSTAindirect(Block &MBB, BlockIt MBBI) {
     StackSlotOffset = StackSlotOp.getImm();
   }
 
+  bool ValIsImag = W65816::IMAG16RegClass.contains(ValReg);
+  bool PtrIsImag = W65816::IMAG16RegClass.contains(PtrReg);
+
+  // Special case: ValReg is imaginary and PtrReg is A.
+  // Loading val from DP to A would clobber the pointer in A.
+  // Fix: store ptr to stack slot FIRST, then push val.
+  if (ValIsImag && PtrReg == W65816::A) {
+    // Step 1: Store ptr (in A) to stack slot at original offset
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr))
+        .addReg(W65816::A)
+        .addImm(StackSlotOffset);
+
+    // Step 2: Load val from DP, push to hardware stack
+    unsigned DPAddr = getImaginaryRegDPAddr(ValReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+    buildMI(MBB, MBBI, W65816::PHA);
+
+    // Step 3: Load idx to Y
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_imm16), W65816::Y).addImm(Idx);
+
+    // Step 4: Restore val to A from hardware stack (SP restored)
+    buildMI(MBB, MBBI, W65816::PLA);
+
+    // Step 5: Store through the pointer (original offset is correct now)
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_srIndY))
+        .addReg(W65816::A)
+        .addImm(StackSlotOffset);
+
+    MI.eraseFromParent();
+    return true;
+  }
+
+  // General case: push val first, then store ptr.
   // Step 1: Save val to hardware stack
   // After this, SP decreases by 2, so stack slot is at offset+2
-  if (ValReg == W65816::A) {
+  if (ValIsImag) {
+    // Imaginary register - load from Direct Page to A, then push
+    unsigned DPAddr = getImaginaryRegDPAddr(ValReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+    buildMI(MBB, MBBI, W65816::PHA);
+  } else if (ValReg == W65816::A) {
     buildMI(MBB, MBBI, W65816::PHA);
   } else if (ValReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::PHX);
@@ -2271,7 +2737,11 @@ bool W65816ExpandPseudo::expandSTAindirect(Block &MBB, BlockIt MBBI) {
 
   // Step 2: Get ptr to A and store to stack_slot
   // IMPORTANT: Adjust offset by +2 because we pushed val in step 1
-  if (PtrReg == W65816::X) {
+  if (PtrIsImag) {
+    // Imaginary register - load from Direct Page to A
+    unsigned DPAddr = getImaginaryRegDPAddr(PtrReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+  } else if (PtrReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (PtrReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
@@ -2560,6 +3030,12 @@ bool W65816ExpandPseudo::expandRELOAD_GPR16(Block &MBB, BlockIt MBBI) {
       buildMI(MBB, MBBI, W65816::TAX);
     } else if (DstReg == W65816::Y) {
       buildMI(MBB, MBBI, W65816::TAY);
+    } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+      // Store A to the imaginary register's DP address.
+      unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(DPAddr);
     }
 
     if (ALive) {
@@ -2622,8 +3098,13 @@ bool W65816ExpandPseudo::expandSPILL_GPR16(Block &MBB, BlockIt MBBI) {
     // Transfer to A
     if (SrcReg == W65816::X) {
       buildMI(MBB, MBBI, W65816::TXA);
-    } else { // Y
+    } else if (SrcReg == W65816::Y) {
       buildMI(MBB, MBBI, W65816::TYA);
+    } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+      // Load imaginary register's DP address into A.
+      unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(DPAddr);
     }
 
     // Store from A to stack slot
@@ -2640,6 +3121,297 @@ bool W65816ExpandPseudo::expandSPILL_GPR16(Block &MBB, BlockIt MBBI) {
       BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
           .addImm(SPILL_SCRATCH_DP);
     }
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLOAD_GPR16_abs(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LOAD_GPR16_abs $dst, $addr
+  // Load from absolute address to any GPR16 register.
+  // For A: LDA_abs
+  // For X: LDX_abs
+  // For Y: LDY_abs
+  // For imaginary: LDA_abs + STA_dp (with A save/restore if live)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  MachineOperand &AddrOp = MI.getOperand(1);
+
+  static const unsigned LOAD_ABS_SCRATCH_DP = 0xFC;
+
+  if (DstReg == W65816::A) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_abs), W65816::A).add(AddrOp);
+  } else if (DstReg == W65816::X) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_abs), W65816::X).add(AddrOp);
+  } else if (DstReg == W65816::Y) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_abs), W65816::Y).add(AddrOp);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Load to imaginary register: LDA_abs + STA_dp
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+
+    if (ALive) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(LOAD_ABS_SCRATCH_DP);
+    }
+
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_abs), W65816::A).add(AddrOp);
+
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+
+    if (ALive) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(LOAD_ABS_SCRATCH_DP);
+    }
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSTORE_GPR16_abs(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // STORE_GPR16_abs $src, $addr
+  // Store from any GPR16 register to absolute address.
+  // For A: STA_abs
+  // For X: STX_abs
+  // For Y: STY_abs
+  // For imaginary: LDA_dp + STA_abs (with A save/restore if live)
+
+  Register SrcReg = MI.getOperand(0).getReg();
+  MachineOperand &AddrOp = MI.getOperand(1);
+
+  static const unsigned STORE_ABS_SCRATCH_DP = 0xFC;
+
+  if (SrcReg == W65816::A) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_abs))
+        .addReg(W65816::A)
+        .add(AddrOp);
+  } else if (SrcReg == W65816::X) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_abs))
+        .addReg(W65816::X)
+        .add(AddrOp);
+  } else if (SrcReg == W65816::Y) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_abs))
+        .addReg(W65816::Y)
+        .add(AddrOp);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Store from imaginary register: LDA_dp + STA_abs
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+
+    if (ALive) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(STORE_ABS_SCRATCH_DP);
+    }
+
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_abs))
+        .addReg(W65816::A)
+        .add(AddrOp);
+
+    if (ALive) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(STORE_ABS_SCRATCH_DP);
+    }
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandZEXT8_GPR16(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // ZEXT8_GPR16 $dst, $src
+  // Zero-extend 8-bit value to 16-bit using AND #$00FF.
+  // No tied operand between src and dst, so the register allocator can
+  // place them in different physical registers, avoiding ACC16 pressure.
+  //
+  // Defs=[A, P] on the pseudo tells the RA that A is always clobbered,
+  // so no manual A save/restore is needed.
+  //
+  // Expansion:
+  //   1. Get src into A (TXA/TYA/LDA_dp if needed)
+  //   2. AND #$00FF
+  //   3. Move result to dst (TAX/TAY/STA_dp if needed)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+
+  // Step 1: Get source value into A.
+  if (SrcReg == W65816::A) {
+    // Already in A.
+  } else if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+  }
+
+  // Step 2: AND with 0x00FF to zero-extend.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  // Step 3: Move result from A to destination.
+  if (DstReg == W65816::A) {
+    // Already in A.
+  } else if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSEXT8_GPR16(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // SEXT8_GPR16 $dst, $src
+  // Sign-extend 8-bit value to 16-bit using branchless arithmetic:
+  //   result = (val & 0xFF) ^ 0x80 - 0x80
+  //
+  // This works because:
+  //   - Positive (0x00-0x7F): XOR flips bit7 → 0x80-0xFF, minus 0x80 →
+  //   0x00-0x7F
+  //   - Negative (0x80-0xFF): XOR flips bit7 → 0x00-0x7F, minus 0x80 →
+  //   0xFF80-0xFFFF
+  //
+  // Defs=[A, P] on the pseudo tells the RA that A is always clobbered.
+  //
+  // Expansion:
+  //   1. Get src into A
+  //   2. AND #$00FF (clear high byte)
+  //   3. EOR #$0080 (flip sign bit)
+  //   4. SEC; SBC #$0080 (subtract 0x80, completing sign extension)
+  //   5. Move result to dst
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+
+  // Step 1: Get source value into A.
+  if (SrcReg == W65816::A) {
+    // Already in A.
+  } else if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+  }
+
+  // Step 2: AND with 0x00FF to isolate the low byte.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  // Step 3: EOR with 0x0080 to flip the sign bit.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x0080);
+
+  // Step 4: SEC + SBC #$0080 to subtract 128 (completes sign extension).
+  buildMI(MBB, MBBI, W65816::SEC);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_imm16), W65816::A).addImm(0x0080);
+
+  // Step 5: Move result from A to destination.
+  if (DstReg == W65816::A) {
+    // Already in A.
+  } else if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLOAD8_ZEXT_GPR16_abs(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LOAD8_ZEXT_GPR16_abs $dst, $addr
+  // Load 8-bit value from absolute address, zero-extend to 16-bit.
+  // Combined load+zext avoids the ACC16 register pressure issue.
+  //
+  // Defs=[A, P] on the pseudo tells the RA that A is always clobbered.
+  //
+  // Expansion:
+  //   SEP #$20      ; Switch to 8-bit accumulator
+  //   LDA addr      ; Load 8-bit value
+  //   REP #$20      ; Switch back to 16-bit
+  //   AND #$00FF    ; Zero-extend (clear high byte)
+  //   (TAX/TAY/STA_dp if dst is not A)
+
+  Register DstReg = MI.getOperand(0).getReg();
+  MachineOperand &AddrOp = MI.getOperand(1);
+
+  // SEP #$20 - switch to 8-bit accumulator mode.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP)).addImm(0x20);
+
+  // LDA addr - load 8-bit value (uses 8-bit mode opcode but same LDA_abs).
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_abs_m8), W65816::A).add(AddrOp);
+
+  // REP #$20 - switch back to 16-bit accumulator mode.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::REP)).addImm(0x20);
+
+  // AND #$00FF - zero-extend the 8-bit value.
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+
+  // Move result to destination.
+  if (DstReg == W65816::A) {
+    // Already in A.
+  } else if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
 
   MI.eraseFromParent();
@@ -2721,7 +3493,7 @@ bool W65816ExpandPseudo::expandLEA_fi(Block &MBB, BlockIt MBBI) {
   }
 
   // Restore A if it was live and we needed to use it
-  if (DstReg != W65816::A && !W65816::IMAG16RegClass.contains(DstReg)) {
+  if (DstReg != W65816::A) {
     LivePhysRegs LiveRegs(*TRI);
     LiveRegs.addLiveOuts(MBB);
     for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
@@ -2774,12 +3546,33 @@ bool W65816ExpandPseudo::expandMOV16ri(Block &MBB, BlockIt MBBI) {
     addSrcOperand(MIB);
   } else if (W65816::IMAG16RegClass.contains(DstReg)) {
     // Imaginary register: LDA #imm + STA $dp
+    // Must save/restore A if it's live, since this expansion clobbers A
+    // but MOV16ri's Defs don't include A.
     unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+
+    static const unsigned MOV_SCRATCH_DP = 0xFC;
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I)
+      LiveRegs.stepBackward(*I);
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+
+    if (ALive) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(MOV_SCRATCH_DP);
+    }
+
     auto MIB = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A);
     addSrcOperand(MIB);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
         .addImm(DPAddr);
+
+    if (ALive) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(MOV_SCRATCH_DP);
+    }
   } else {
     llvm_unreachable("MOV16ri with invalid register");
   }
@@ -3176,6 +3969,93 @@ bool W65816ExpandPseudo::expandSelect16Unsigned(Block &MBB, BlockIt MBBI,
     // DstReg == A means result is already in place
   }
   // FalseMBB falls through to SinkMBB
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSelect16Simple(Block &MBB, BlockIt MBBI,
+                                              unsigned BranchOpcode) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+  MachineFunction *MF = MBB.getParent();
+
+  // Select16_xx $dst, $trueVal, $falseVal
+  // The comparison has already been done (P flags are set).
+  // Select trueVal if the condition is true, else falseVal.
+  // Uses a single branch instruction (BEQ/BNE/BCC/BCS).
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register TrueReg = MI.getOperand(1).getReg();
+  Register FalseReg = MI.getOperand(2).getReg();
+
+  const BasicBlock *BB = MBB.getBasicBlock();
+
+  MachineBasicBlock *TrueMBB = MF->CreateMachineBasicBlock(BB);
+  MachineBasicBlock *FalseMBB = MF->CreateMachineBasicBlock(BB);
+  MachineBasicBlock *SinkMBB = MF->CreateMachineBasicBlock(BB);
+
+  MachineFunction::iterator InsertPt = std::next(MBB.getIterator());
+  MF->insert(InsertPt, TrueMBB);
+  MF->insert(InsertPt, FalseMBB);
+  MF->insert(InsertPt, SinkMBB);
+
+  SinkMBB->splice(SinkMBB->begin(), &MBB, std::next(MBBI), MBB.end());
+  SinkMBB->transferSuccessors(&MBB);
+
+  MBB.addSuccessor(TrueMBB);
+  MBB.addSuccessor(FalseMBB);
+  TrueMBB->addSuccessor(SinkMBB);
+  FalseMBB->addSuccessor(SinkMBB);
+
+  // Branch on condition to TrueMBB, fall through to FalseMBB.
+  BuildMI(MBB, MBBI, DL, TII->get(BranchOpcode)).addMBB(TrueMBB);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::BRA)).addMBB(FalseMBB);
+
+  // TrueMBB: copy trueVal to dst, then jump to sink.
+  if (TrueReg != DstReg) {
+    if (TrueReg == W65816::X) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TXA));
+    } else if (TrueReg == W65816::Y) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TYA));
+    } else if (W65816::IMAG16RegClass.contains(TrueReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(TrueReg);
+      BuildMI(TrueMBB, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+    }
+    if (DstReg == W65816::X) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TAX));
+    } else if (DstReg == W65816::Y) {
+      BuildMI(TrueMBB, DL, TII->get(W65816::TAY));
+    } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+      BuildMI(TrueMBB, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(DPAddr);
+    }
+  }
+  BuildMI(TrueMBB, DL, TII->get(W65816::BRA)).addMBB(SinkMBB);
+
+  // FalseMBB: copy falseVal to dst (falls through to SinkMBB).
+  if (FalseReg != DstReg) {
+    if (FalseReg == W65816::X) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TXA));
+    } else if (FalseReg == W65816::Y) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TYA));
+    } else if (W65816::IMAG16RegClass.contains(FalseReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(FalseReg);
+      BuildMI(FalseMBB, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+    }
+    if (DstReg == W65816::X) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TAX));
+    } else if (DstReg == W65816::Y) {
+      BuildMI(FalseMBB, DL, TII->get(W65816::TAY));
+    } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+      BuildMI(FalseMBB, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(DPAddr);
+    }
+  }
 
   MI.eraseFromParent();
   return true;
@@ -3631,17 +4511,8 @@ bool W65816ExpandPseudo::expandLDA8indirect(Block &MBB, BlockIt MBBI) {
   Register PtrReg = MI.getOperand(2).getReg();
   int64_t Idx = MI.getOperand(3).getImm();
 
-  // Move pointer to A if not already there
-  if (PtrReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
-  } else if (PtrReg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
-  } else if (PtrReg != W65816::A) {
-    // Copy from virtual register - this shouldn't happen after reg alloc
-    // but handle it gracefully
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-        .addReg(PtrReg);
-  }
+  // Move pointer to A if not already there (handles imaginary regs)
+  emitCopyToA(MBB, MBBI, PtrReg);
 
   // STA slot,s - store pointer to stack slot
   auto StoreInst =
@@ -3715,23 +4586,14 @@ bool W65816ExpandPseudo::expandSTA8indirect(Block &MBB, BlockIt MBBI) {
   // restore value to A, then do the 8-bit store.
 
   bool SrcInA = (SrcReg == W65816::A);
-  bool PtrInA = (PtrReg == W65816::A);
 
   // Step 1: Save the value if it's in A (we need A for storing the pointer)
   if (SrcInA) {
     buildMI(MBB, MBBI, W65816::PHA); // Save value to stack
   }
 
-  // Step 2: Get pointer into A
-  if (PtrReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
-  } else if (PtrReg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
-  } else if (!PtrInA) {
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-        .addReg(PtrReg);
-  }
-  // Note: if PtrInA is true, A already has the pointer
+  // Step 2: Get pointer into A (handles A/X/Y/imaginary)
+  emitCopyToA(MBB, MBBI, PtrReg);
 
   // Step 3: Store pointer to stack slot
   auto StorePtr =
@@ -3746,14 +4608,9 @@ bool W65816ExpandPseudo::expandSTA8indirect(Block &MBB, BlockIt MBBI) {
   if (SrcInA) {
     // Value was saved to stack, pull it back
     buildMI(MBB, MBBI, W65816::PLA);
-  } else if (SrcReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
-  } else if (SrcReg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
   } else {
-    // Virtual register
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-        .addReg(SrcReg);
+    // Handles X/Y/imaginary registers
+    emitCopyToA(MBB, MBBI, SrcReg);
   }
 
   // SEP #$20 - set M flag (8-bit accumulator mode)
@@ -3797,16 +4654,8 @@ bool W65816ExpandPseudo::expandLDA8indirectIdx(Block &MBB, BlockIt MBBI) {
   Register PtrReg = MI.getOperand(2).getReg();
   Register IdxReg = MI.getOperand(3).getReg();
 
-  // First, get the pointer into A and store to stack
-  if (PtrReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
-  } else if (PtrReg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
-  } else if (PtrReg != W65816::A) {
-    // Copy from virtual reg
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-        .addReg(PtrReg);
-  }
+  // First, get the pointer into A and store to stack (handles imaginary)
+  emitCopyToA(MBB, MBBI, PtrReg);
 
   // Store pointer to stack slot
   auto StorePtr =
@@ -3817,16 +4666,8 @@ bool W65816ExpandPseudo::expandLDA8indirectIdx(Block &MBB, BlockIt MBBI) {
     StorePtr.addImm(SlotOp.getImm());
   }
 
-  // Get index into Y
-  if (IdxReg == W65816::A) {
-    buildMI(MBB, MBBI, W65816::TAY);
-  } else if (IdxReg == W65816::X) {
-    // W65816 has TXY instruction
-    buildMI(MBB, MBBI, W65816::TXY);
-  } else if (IdxReg != W65816::Y) {
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::Y)
-        .addReg(IdxReg);
-  }
+  // Get index into Y (handles imaginary)
+  emitCopyToY(MBB, MBBI, IdxReg);
 
   // SEP #$20 - set M flag (8-bit accumulator mode)
   BuildMI(MBB, MBBI, DL, TII->get(W65816::SEP)).addImm(0x20);
@@ -3879,6 +4720,7 @@ bool W65816ExpandPseudo::expandSTA8indirectIdx(Block &MBB, BlockIt MBBI) {
   bool SrcInA = (SrcReg == W65816::A);
   bool SrcInX = (SrcReg == W65816::X);
   bool SrcInY = (SrcReg == W65816::Y);
+  bool SrcIsImag = W65816::IMAG16RegClass.contains(SrcReg);
   bool IdxInY = (IdxReg == W65816::Y);
 
   // If src is in Y and we need to put idx in Y, save src first
@@ -3896,34 +4738,20 @@ bool W65816ExpandPseudo::expandSTA8indirectIdx(Block &MBB, BlockIt MBBI) {
     }
   }
 
-  // Get pointer into A and store to stack
-  if (PtrReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXA);
-  } else if (PtrReg == W65816::Y) {
-    buildMI(MBB, MBBI, W65816::TYA);
-  } else if (PtrReg != W65816::A) {
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-        .addReg(PtrReg);
-  }
+  // Get pointer into A and store to stack (handles imaginary)
+  emitCopyToA(MBB, MBBI, PtrReg);
 
   // Store pointer to stack slot
-  auto StorePtr =
+  auto StorePtr2 =
       BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_sr)).addReg(W65816::A);
   if (SlotOp.isFI()) {
-    StorePtr.addFrameIndex(SlotOp.getIndex());
+    StorePtr2.addFrameIndex(SlotOp.getIndex());
   } else {
-    StorePtr.addImm(SlotOp.getImm());
+    StorePtr2.addImm(SlotOp.getImm());
   }
 
-  // Get index into Y
-  if (IdxReg == W65816::A) {
-    buildMI(MBB, MBBI, W65816::TAY);
-  } else if (IdxReg == W65816::X) {
-    buildMI(MBB, MBBI, W65816::TXY);
-  } else if (IdxReg != W65816::Y) {
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::Y)
-        .addReg(IdxReg);
-  }
+  // Get index into Y (handles imaginary)
+  emitCopyToY(MBB, MBBI, IdxReg);
 
   // Get src into A for the store
   if (SrcInA) {
@@ -3938,11 +4766,11 @@ bool W65816ExpandPseudo::expandSTA8indirectIdx(Block &MBB, BlockIt MBBI) {
   } else if (SrcInY && IdxInY) {
     // Both src and idx were in Y - this shouldn't happen with proper reg alloc
     // but handle it anyway - idx is now in Y, and src is lost
-    // Fall through to TYA which gets the index (wrong but can't do better)
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (SrcIsImag) {
+    emitCopyToA(MBB, MBBI, SrcReg);
   } else {
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-        .addReg(SrcReg);
+    emitCopyToA(MBB, MBBI, SrcReg);
   }
 
   // SEP #$20 - set M flag (8-bit accumulator mode)
@@ -4137,18 +4965,8 @@ bool W65816ExpandPseudo::expandLDAindexedDPY(Block &MBB, BlockIt MBBI) {
                       .addReg(W65816::A, RegState::Define);
   LoadInst.add(DPAddrOp);
 
-  // Move result to destination register if needed
-  if (DstReg != W65816::A) {
-    if (DstReg == W65816::X) {
-      buildMI(MBB, MBBI, W65816::TAX);
-    } else if (DstReg == W65816::Y) {
-      buildMI(MBB, MBBI, W65816::TAY);
-    } else {
-      // Copy to destination GPR16
-      BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), DstReg)
-          .addReg(W65816::A);
-    }
-  }
+  // Move result to destination register if needed (handles imaginary)
+  emitCopyFromA(MBB, MBBI, DstReg);
 
   MI.eraseFromParent();
   return true;
@@ -4175,15 +4993,7 @@ bool W65816ExpandPseudo::expandSTAindexedDPY(Block &MBB, BlockIt MBBI) {
   if (IdxInY) {
     // Index is already in Y, just need value in A
     if (!ValInA) {
-      if (ValInX) {
-        buildMI(MBB, MBBI, W65816::TXA);
-      } else if (ValInY) {
-        // Both val and idx in Y - use the same value
-        buildMI(MBB, MBBI, W65816::TYA);
-      } else {
-        BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-            .addReg(ValReg);
-      }
+      emitCopyToA(MBB, MBBI, ValReg);
     }
   } else if (IdxInA) {
     // Index in A, need to move to Y, then get value to A
@@ -4200,11 +5010,8 @@ bool W65816ExpandPseudo::expandSTAindexedDPY(Block &MBB, BlockIt MBBI) {
       buildMI(MBB, MBBI, W65816::PLA); // restore val to A
     } else {
       buildMI(MBB, MBBI, W65816::TAY); // idx to Y
-      if (ValInX) {
-        buildMI(MBB, MBBI, W65816::TXA);
-      } else if (!ValInA) { // Val in a GPR
-        BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-            .addReg(ValReg);
+      if (!ValInA) {
+        emitCopyToA(MBB, MBBI, ValReg);
       }
     }
   } else if (IdxInX) {
@@ -4227,27 +5034,22 @@ bool W65816ExpandPseudo::expandSTAindexedDPY(Block &MBB, BlockIt MBBI) {
       buildMI(MBB, MBBI, W65816::TAY);
       if (ValInX) {
         // Val was in X, now clobbered - this is a conflict
-        // Should not happen with proper register allocation
         buildMI(MBB, MBBI, W65816::TYA); // Best effort - use idx as val
       } else {
-        BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-            .addReg(ValReg);
+        emitCopyToA(MBB, MBBI, ValReg);
       }
     }
   } else {
-    // Index in a GPR (not A, X, or Y)
-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::Y)
-        .addReg(IdxReg);
+    // Index in a GPR (not A, X, or Y) - handles imaginary
+    emitCopyToY(MBB, MBBI, IdxReg);
     if (!ValInA) {
       if (ValInX) {
         buildMI(MBB, MBBI, W65816::TXA);
       } else if (ValInY) {
         // Val was in Y, now clobbered by idx
-        buildMI(MBB, MBBI,
-                W65816::TYA); // Get idx as val (incorrect but unavoidable)
+        buildMI(MBB, MBBI, W65816::TYA);
       } else {
-        BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::COPY), W65816::A)
-            .addReg(ValReg);
+        emitCopyToA(MBB, MBBI, ValReg);
       }
     }
   }
@@ -4488,17 +5290,23 @@ bool W65816ExpandPseudo::expandCOPY_IMAG_TO_IMAG(Block &MBB, BlockIt MBBI) {
   DebugLoc DL = MI.getDebugLoc();
 
   // COPY_IMAG_TO_IMAG $dst (imag), $src (imag)
-  // Copy between two imaginary registers
+  // Copy between two imaginary registers via LDA/STA.
+  // Must save/restore A since the register allocator does not expect
+  // COPY operations to clobber registers other than the destination.
   Register DstReg = MI.getOperand(0).getReg();
   Register SrcReg = MI.getOperand(1).getReg();
   unsigned SrcDPAddr = getImaginaryRegDPAddr(SrcReg);
   unsigned DstDPAddr = getImaginaryRegDPAddr(DstReg);
 
+  // Save A (the copy goes through A but must not clobber it)
+  buildMI(MBB, MBBI, W65816::PHA);
   // Load from source, store to destination
   BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(SrcDPAddr);
   BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
       .addReg(W65816::A)
       .addImm(DstDPAddr);
+  // Restore A
+  buildMI(MBB, MBBI, W65816::PLA);
 
   MI.eraseFromParent();
   return true;

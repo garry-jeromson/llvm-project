@@ -43,7 +43,8 @@ define i16 @inc_reg(i16 %a) {
 }
 
 ; CHECK-LABEL: dec_reg:
-; CHECK: dec a
+; CHECK: clc
+; CHECK: adc #65535
 ; CHECK: rts
 define i16 @dec_reg(i16 %a) {
   %r = add i16 %a, -1

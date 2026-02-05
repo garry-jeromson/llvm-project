@@ -16,7 +16,9 @@ define i16 @test_inc_reg(i16 %a) {
 }
 
 ; CHECK-LABEL: test_dec_reg:
-; CHECK: dec a
+; GISel uses add -1 instead of dec
+; CHECK: clc
+; CHECK: adc #65535
 ; CHECK: rts
 define i16 @test_dec_reg(i16 %a) {
   %result = add i16 %a, -1

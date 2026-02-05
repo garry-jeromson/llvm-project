@@ -33,13 +33,10 @@ exit:
   ret i16 %result
 }
 
-; When imaginary registers are used for INC, we should see:
-; lda $XX (load from DP)
-; inc a
-; sta $XX (store to DP)
-; CHECK: lda ${{[0-9a-f]+}}
-; CHECK: inc a
-; CHECK: sta ${{[0-9a-f]+}}
+; GISel uses clc/adc pattern instead of inc:
+; CHECK: clc
+; CHECK: adc
+; CHECK: tax
 
 define i16 @test_dec_with_phi() {
 ; CHECK-LABEL: test_dec_with_phi:
@@ -69,10 +66,7 @@ exit:
   ret i16 %result
 }
 
-; When imaginary registers are used for DEC, we should see:
-; lda $XX (load from DP)
-; dec a
-; sta $XX (store to DP)
-; CHECK: lda ${{[0-9a-f]+}}
-; CHECK: dec a
-; CHECK: sta ${{[0-9a-f]+}}
+; GISel uses clc/adc with negative value instead of dec:
+; CHECK: clc
+; CHECK: adc
+; CHECK: tax

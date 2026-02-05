@@ -108,9 +108,12 @@ define i16 @load_byte_use_word() {
 @byte_array = global [16 x i8] zeroinitializer
 
 ; Test 8-bit load from global array with constant index
+; GISel uses indirect addressing for byte array access
 ; CHECK-LABEL: load_byte_array_const:
+; CHECK: lda #byte_array
 ; CHECK: sep #32
-; CHECK: lda byte_array+5
+; CHECK: ldy #5
+; CHECK: lda (${{[0-9]+}},s),y
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: rts
@@ -122,11 +125,11 @@ define i16 @load_byte_array_const() {
 }
 
 ; Test 8-bit load from global array with variable index
+; GISel uses indirect addressing for byte array access
 ; CHECK-LABEL: load_byte_array_var:
-; Variable index (in A per calling convention) goes to X register, then indexed load
-; CHECK: tax
+; CHECK: ldx #byte_array
 ; CHECK: sep #32
-; CHECK: lda byte_array,x
+; CHECK: lda (${{[0-9]+}},s),y
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: rts
@@ -151,10 +154,11 @@ define void @store_byte_array_const(i16 %val) {
 }
 
 ; Test 8-bit store to global array with variable index
+; GISel uses indirect addressing for byte array stores
 ; CHECK-LABEL: store_byte_array_var:
-; val is in A, idx is in X (per calling convention) - use directly
+; CHECK: ldy #byte_array
 ; CHECK: sep #32
-; CHECK: sta byte_array,x
+; CHECK: sta (${{[0-9]+}},s),y
 ; CHECK: rep #32
 ; CHECK: rts
 define void @store_byte_array_var(i16 %val, i16 %idx) {

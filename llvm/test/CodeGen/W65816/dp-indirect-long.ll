@@ -54,11 +54,12 @@ define void @test_stz_dp() {
 
 @zp_array = global [4 x i16] zeroinitializer, section ".zeropage"
 
-; Direct page indexed STZ
+; Direct page indexed STZ - GISel uses indirect addressing
 ; CHECK-LABEL: test_stz_dp_indexed:
+; CHECK: ldx #zp_array
+; CHECK: ldy #0
 ; CHECK: asl a
-; CHECK: tax
-; CHECK: stz zp_array,x
+; CHECK: sta (${{[0-9]+}},s),y
 ; CHECK: rts
 define void @test_stz_dp_indexed(i16 %idx) {
   %ptr = getelementptr [4 x i16], ptr @zp_array, i16 0, i16 %idx
@@ -66,10 +67,11 @@ define void @test_stz_dp_indexed(i16 %idx) {
   ret void
 }
 
-; Direct page indexed store (with register shuffling for idx in A, val in X)
+; Direct page indexed store - GISel uses indirect addressing
 ; CHECK-LABEL: test_sta_dp_indexed:
+; CHECK: ldy #zp_array
 ; CHECK: asl a
-; CHECK: sta zp_array,x
+; CHECK: sta (${{[0-9]+}},s),y
 ; CHECK: rts
 define void @test_sta_dp_indexed(i16 %idx, i16 %val) {
   %ptr = getelementptr [4 x i16], ptr @zp_array, i16 0, i16 %idx
@@ -77,11 +79,12 @@ define void @test_sta_dp_indexed(i16 %idx, i16 %val) {
   ret void
 }
 
-; Direct page indexed load
+; Direct page indexed load - GISel uses indirect addressing
 ; CHECK-LABEL: test_lda_dp_indexed:
+; CHECK: ldx #zp_array
 ; CHECK: asl a
-; CHECK: tax
-; CHECK: lda zp_array,x
+; CHECK: tay
+; CHECK: lda (${{[0-9]+}},s),y
 ; CHECK: rts
 define i16 @test_lda_dp_indexed(i16 %idx) {
   %ptr = getelementptr [4 x i16], ptr @zp_array, i16 0, i16 %idx

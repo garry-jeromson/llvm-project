@@ -12,7 +12,7 @@
 ; CHECK: lda #0
 ; CHECK: tcd
 ; CHECK: lda #42
-; CHECK: sta ${{[0-9a-f]+}}
+; CHECK: sta {{[0-9]+}},s
 ; CHECK: pld
 ; CHECK: rts
 
@@ -21,7 +21,7 @@
 ; ASSUMED0-NOT: phd
 ; ASSUMED0-NOT: tcd
 ; ASSUMED0: lda #42
-; ASSUMED0: sta ${{[0-9a-f]+}}
+; ASSUMED0: sta {{[0-9]+}},s
 ; ASSUMED0-NOT: pld
 ; ASSUMED0: rts
 define i16 @dp_locals() #0 {

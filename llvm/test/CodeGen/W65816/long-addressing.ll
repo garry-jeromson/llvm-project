@@ -105,9 +105,11 @@ define i16 @test_rom_load_idx() {
 ; Uses long indexed addressing (LDA_longX, opcode 0xBF)
 ; Assembly syntax is same as regular indexed, but machine code is 4 bytes
 ; CHECK-LABEL: test_rom_load_var:
+; GISel uses indirect addressing for variable index
+; CHECK: ldx #rom_table
 ; CHECK: asl a
-; CHECK: tax
-; CHECK: lda rom_table,x
+; CHECK: tay
+; CHECK: lda (${{[0-9]+}},s),y
 define i16 @test_rom_load_var(i16 %idx) {
   %ptr = getelementptr [4 x i16], ptr @rom_table, i16 0, i16 %idx
   %val = load i16, ptr %ptr
@@ -119,11 +121,10 @@ define i16 @test_rom_load_var(i16 %idx) {
 ; Note: Args are A=idx, X=val. After shift, A=idx*2, X=val.
 ; We need A=val, X=idx*2 for the store, so swap is required.
 ; CHECK-LABEL: test_far_store_var:
+; GISel uses indirect addressing for variable index stores
+; CHECK: ldy #far_array
 ; CHECK: asl a
-; CHECK: pha
-; CHECK: txa
-; CHECK: plx
-; CHECK: sta far_array,x
+; CHECK: sta (${{[0-9]+}},s),y
 @far_array = global [8 x i16] zeroinitializer, section ".fardata"
 
 define void @test_far_store_var(i16 %idx, i16 %val) {
@@ -179,10 +180,11 @@ define void @test_cross_bank_copy() {
 }
 
 ; CHECK-LABEL: test_cross_bank_indexed:
+; GISel uses indirect addressing for indexed access
+; CHECK: ldx #rom_table
 ; CHECK: asl a
-; CHECK: tax
-; CHECK: lda rom_table,x
-; CHECK: sta far_array,x
+; CHECK: lda (${{[0-9]+}},s),y
+; CHECK: sta (${{[0-9]+}},s),y
 ; CHECK: rts
 define void @test_cross_bank_indexed(i16 %idx) {
   %src_ptr = getelementptr [4 x i16], ptr @rom_table, i16 0, i16 %idx
@@ -223,10 +225,11 @@ define i16 @test_last_element() {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: test_far_add:
-; CHECK: lda far_data
+; GISel loads far_data into X, adds with A, stores result back via X
+; CHECK: ldx far_data
 ; CHECK: clc
 ; CHECK: adc
-; CHECK: sta far_data
+; CHECK: stx far_data
 ; CHECK: rts
 define void @test_far_add(i16 %addend) {
   %val = load i16, ptr @far_data

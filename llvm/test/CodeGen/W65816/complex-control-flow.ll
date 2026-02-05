@@ -25,8 +25,8 @@ define i16 @nested_calls(i16 %x) {
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: diamond_flow:
-; CHECK: cmp
-; CHECK: b{{eq|ne}}
+; CHECK: cmp #0
+; CHECK: bne
 ; CHECK: rts
 define i16 @diamond_flow(i16 %cond, i16 %a, i16 %b) {
 entry:
@@ -51,7 +51,7 @@ join:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: count_loop:
-; CHECK: b{{ne|eq}}
+; CHECK: bne
 ; CHECK: rts
 define i16 @count_loop(i16 %n) {
 entry:
@@ -74,6 +74,8 @@ exit:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: early_return:
+; CHECK: cpx #0
+; CHECK: bne
 ; CHECK: rts
 define i16 @early_return(i16 %x) {
 entry:
@@ -93,8 +95,10 @@ compute:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: chained_compare:
-; CHECK: cp{{x|y}}
-; CHECK: b{{cc|cs|eq|ne}}
+; CHECK: cpx #10
+; CHECK: bcs
+; CHECK: cpx #100
+; CHECK: bcs
 define i16 @chained_compare(i16 %x) {
 entry:
   %c1 = icmp ult i16 %x, 10
@@ -121,7 +125,8 @@ large:
 @global_limit = global i16 100
 
 ; CHECK-LABEL: loop_with_break:
-; CHECK: b{{ne|eq}}
+; CHECK: lda global_limit
+; CHECK: beq
 ; CHECK: rts
 define i16 @loop_with_break(i16 %start) {
 entry:

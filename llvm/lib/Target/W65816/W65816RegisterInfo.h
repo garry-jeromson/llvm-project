@@ -29,6 +29,9 @@ public:
   const uint16_t *
   getCalleeSavedRegs(const MachineFunction *MF = nullptr) const override;
 
+  const uint32_t *getCallPreservedMask(const MachineFunction &MF,
+                                       CallingConv::ID CC) const override;
+
   BitVector getReservedRegs(const MachineFunction &MF) const override;
 
   const TargetRegisterClass *

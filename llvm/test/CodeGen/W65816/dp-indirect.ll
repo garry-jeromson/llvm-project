@@ -18,7 +18,11 @@ target triple = "w65816-unknown-none"
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: load_through_dp_ptr:
-; CHECK: lda (dp_ptr)
+; GISel uses stack-relative indirect instead of DP indirect
+; CHECK: lda dp_ptr
+; CHECK: sta {{[0-9]+}},s
+; CHECK: ldy #0
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rts
 define i16 @load_through_dp_ptr() {
   %ptr = load ptr, ptr @dp_ptr
@@ -31,7 +35,9 @@ define i16 @load_through_dp_ptr() {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: store_through_dp_ptr:
-; CHECK: sta (dp_ptr)
+; GISel uses stack-relative indirect instead of DP indirect
+; CHECK: ldx dp_ptr
+; CHECK: sta (${{[0-9a-f]+}},s),y
 ; CHECK: rts
 define void @store_through_dp_ptr(i16 %val) {
   %ptr = load ptr, ptr @dp_ptr
@@ -62,7 +68,11 @@ define i16 @load_through_regular_ptr() {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: load_indexed_dp_ptr:
-; CHECK: lda (dp_ptr),y
+; GISel uses stack-relative indirect
+; CHECK: ldx dp_ptr
+; CHECK: asl a
+; CHECK: tay
+; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rts
 define i16 @load_indexed_dp_ptr(i16 %idx) {
   %ptr = load ptr, ptr @dp_ptr
@@ -72,7 +82,10 @@ define i16 @load_indexed_dp_ptr(i16 %idx) {
 }
 
 ; CHECK-LABEL: store_indexed_dp_ptr:
-; CHECK: sta (dp_ptr),y
+; GISel uses stack-relative indirect
+; CHECK: ldy dp_ptr
+; CHECK: asl a
+; CHECK: sta (${{[0-9a-f]+}},s),y
 ; CHECK: rts
 define void @store_indexed_dp_ptr(i16 %idx, i16 %val) {
   %ptr = load ptr, ptr @dp_ptr

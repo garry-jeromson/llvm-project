@@ -50,10 +50,9 @@ entry:
 declare void @external_func()
 
 ; CHECK-LABEL: load_across_call:
-; CHECK: sta $0010
+; CHECK: sta {{[0-9]+}},s
 ; CHECK: jsr external_func
-; CHECK: sta 1,s
-; CHECK: lda ($01,s),y
+; CHECK: lda (${{[0-9]+}},s),y
 ; CHECK: rts
 define i16 @load_across_call(ptr %p) {
 entry:

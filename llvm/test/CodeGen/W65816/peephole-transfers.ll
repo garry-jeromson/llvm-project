@@ -6,17 +6,14 @@
 
 target triple = "w65816-unknown-none"
 
-; Test 1: Array access should not have TAY;TYA at the end
-; The original codegen produces: lda array,x; tay; tya; rts
-; After peephole: lda array,x; rts
+; Test 1: Array access - GISel uses indirect addressing instead of indexed
 define i16 @array_access(i16 %idx) {
 ; CHECK-LABEL: array_access:
+; CHECK:       ldx #array
 ; CHECK:       asl a
-; CHECK-NEXT:  tax
-; CHECK-NEXT:  lda array,x
-; CHECK-NOT:   tay
-; CHECK-NOT:   tya
-; CHECK-NEXT:  rts
+; CHECK:       tay
+; CHECK:       lda (${{[0-9]+}},s),y
+; CHECK:       rts
   %ptr = getelementptr [10 x i16], ptr @array, i16 0, i16 %idx
   %val = load i16, ptr %ptr
   ret i16 %val

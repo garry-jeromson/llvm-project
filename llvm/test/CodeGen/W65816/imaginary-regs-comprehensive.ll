@@ -122,14 +122,16 @@ entry:
 
 ; CHECK-LABEL: compare_with_spill:
 ; Tests comparison when values are in imaginary registers
+; Use different true/false values to avoid G_SMAX combine
 define i16 @compare_with_spill(i16 %a, i16 %b, i16 %c, i16 %d) {
 ; CHECK: rts
 entry:
   %sum1 = add i16 %a, %b
   %sum2 = add i16 %c, %d
+  %sum3 = add i16 %sum1, %sum2
   ; Compare with sum1 and sum2 possibly in imaginary registers
   %cmp = icmp sgt i16 %sum1, %sum2
-  %result = select i1 %cmp, i16 %sum1, i16 %sum2
+  %result = select i1 %cmp, i16 %sum3, i16 %sum2
   ret i16 %result
 }
 

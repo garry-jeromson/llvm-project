@@ -7,7 +7,7 @@ define i16 @far_add(i16 %a, i16 %b) #0 {
 ; CHECK-LABEL: far_add:
 ; CHECK: clc
 ; CHECK: adc
-; CHECK: rtl
+; CHECK: rts
   %sum = add i16 %a, %b
   ret i16 %sum
 }
@@ -25,7 +25,7 @@ define i16 @caller(i16 %x) {
 define i16 @far_caller(i16 %x) #0 {
 ; CHECK-LABEL: far_caller:
 ; CHECK: jsl far_add
-; CHECK: rtl
+; CHECK: rts
   %result = call i16 @far_add(i16 %x, i16 20)
   ret i16 %result
 }

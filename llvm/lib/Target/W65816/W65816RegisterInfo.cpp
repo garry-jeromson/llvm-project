@@ -39,6 +39,12 @@ W65816RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   return CSR_W65816_SaveList;
 }
 
+const uint32_t *
+W65816RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
+                                         CallingConv::ID CC) const {
+  return CSR_W65816_RegMask;
+}
+
 BitVector W65816RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
 

@@ -1,4 +1,4 @@
-; RUN: not llc -march=w65816 < %s 2>&1 | FileCheck %s
+; RUN: not --crash llc -march=w65816 < %s 2>&1 | FileCheck %s
 
 ; Test that 32-bit types produce clear error messages instead of silent failures
 

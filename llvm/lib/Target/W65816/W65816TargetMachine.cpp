@@ -18,9 +18,15 @@
 #include "W65816MachineFunctionInfo.h"
 #include "W65816TargetObjectFile.h"
 
+#include "llvm/CodeGen/GlobalISel/CSEInfo.h"
+#include "llvm/CodeGen/GlobalISel/IRTranslator.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
+#include "llvm/CodeGen/GlobalISel/Legalizer.h"
+#include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
 
@@ -63,6 +69,9 @@ W65816TargetMachine::W65816TargetMachine(const Target &T, const Triple &TT,
       Subtarget(TT, std::string(getCPU(CPU)), std::string(FS), *this) {
   TLOF = std::make_unique<W65816TargetObjectFile>();
   initAsmInfo();
+  setGlobalISel(true);
+  setFastISel(false);
+  setO0WantsFastISel(false);
 }
 
 namespace {
@@ -76,6 +85,12 @@ public:
   }
 
   bool addInstSelector() override;
+  bool addIRTranslator() override;
+  void addPreLegalizeMachineIR() override;
+  bool addLegalizeMachineIR() override;
+  void addPreRegBankSelect() override;
+  bool addRegBankSelect() override;
+  bool addGlobalInstructionSelect() override;
   void addPreEmitPass() override;
 };
 } // namespace
@@ -85,7 +100,35 @@ TargetPassConfig *W65816TargetMachine::createPassConfig(PassManagerBase &PM) {
 }
 
 bool W65816PassConfig::addInstSelector() {
-  addPass(createW65816ISelDag(getW65816TargetMachine(), getOptLevel()));
+  // SDAG removed — GlobalISel is the sole instruction selector.
+  return false;
+}
+
+bool W65816PassConfig::addIRTranslator() {
+  addPass(new IRTranslator());
+  return false;
+}
+
+void W65816PassConfig::addPreLegalizeMachineIR() {
+  addPass(createW65816PreLegalizerCombiner());
+}
+
+bool W65816PassConfig::addLegalizeMachineIR() {
+  addPass(new Legalizer());
+  return false;
+}
+
+void W65816PassConfig::addPreRegBankSelect() {
+  addPass(createW65816PostLegalizerCombiner());
+}
+
+bool W65816PassConfig::addRegBankSelect() {
+  addPass(new RegBankSelect());
+  return false;
+}
+
+bool W65816PassConfig::addGlobalInstructionSelect() {
+  addPass(new InstructionSelect());
   return false;
 }
 
@@ -110,7 +153,10 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeW65816Target() {
   RegisterTargetMachine<W65816TargetMachine> X(getTheW65816Target());
 
   auto &PR = *PassRegistry::getPassRegistry();
-  initializeW65816DAGToDAGISelLegacyPass(PR);
+  initializeGlobalISel(PR);
+
   initializeW65816ExpandPseudoPass(PR);
   initializeW65816PeepholeOptPass(PR);
+  initializeW65816PreLegalizerCombinerPass(PR);
+  initializeW65816PostLegalizerCombinerPass(PR);
 }

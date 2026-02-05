@@ -33,10 +33,11 @@ define void @store_absolute(i16 %val) {
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: load_indexed_x:
-; Index calculation: multiply by 2 (asl), put in X
+; GISel uses indirect addressing: base in stack, offset in Y
+; CHECK: ldx #array
 ; CHECK: asl a
-; CHECK: tax
-; CHECK: lda array,x
+; CHECK: tay
+; CHECK: lda (${{[0-9]+}},s),y
 ; CHECK: rts
 define i16 @load_indexed_x(i16 %idx) {
   %ptr = getelementptr [16 x i16], ptr @array, i16 0, i16 %idx
@@ -45,9 +46,9 @@ define i16 @load_indexed_x(i16 %idx) {
 }
 
 ; CHECK-LABEL: store_indexed_x:
-; Multiply by 2, move to X, store with indexed addressing
+; GISel uses indirect addressing for indexed stores
 ; CHECK: asl a
-; CHECK: sta array,x
+; CHECK: sta (${{[0-9]+}},s),y
 ; CHECK: rts
 define void @store_indexed_x(i16 %idx, i16 %val) {
   ; Scale idx by 2 for i16 access
@@ -147,9 +148,11 @@ define void @mixed_addressing() {
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: indexed_runtime:
+; GISel uses indirect addressing: base in stack, offset in Y
+; CHECK: ldx #array
 ; CHECK: asl a
-; CHECK: tax
-; CHECK: lda array,x
+; CHECK: tay
+; CHECK: lda (${{[0-9]+}},s),y
 ; CHECK: rts
 define i16 @indexed_runtime(i16 %i) {
   %ptr = getelementptr [16 x i16], ptr @array, i16 0, i16 %i

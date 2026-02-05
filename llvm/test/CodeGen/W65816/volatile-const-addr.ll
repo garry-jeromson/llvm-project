@@ -39,7 +39,8 @@ define void @store_const_addr_8(i16 %val) {
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: store_imm_const_addr:
-; CHECK: lda #128
+; GISel uses 16-bit representation of 128 as i8 = 65408 (sign extended)
+; CHECK: lda #65408
 ; CHECK: sep #32
 ; CHECK: sta $2115
 ; CHECK: rep #32
@@ -56,7 +57,8 @@ define void @store_imm_const_addr() {
 ; CHECK-LABEL: mul_negative:
 ; Should not crash, should call __mulhi3
 ; -10000 as unsigned 16-bit = 55536
-; CHECK: ldx #55536
+; GISel loads constant into A instead of X
+; CHECK: lda #55536
 ; CHECK: jsr __mulhi3
 ; CHECK: rts
 define i16 @mul_negative(i16 %x) {
@@ -66,7 +68,8 @@ define i16 @mul_negative(i16 %x) {
 
 ; CHECK-LABEL: mul_negative_small:
 ; -10 as unsigned 16-bit = 65526
-; CHECK: ldx #65526
+; GISel loads constant into A instead of X
+; CHECK: lda #65526
 ; CHECK: jsr __mulhi3
 ; CHECK: rts
 define i16 @mul_negative_small(i16 %x) {

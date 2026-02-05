@@ -14,15 +14,16 @@ target triple = "w65816-unknown-none"
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: and_two_byte_loads:
-; Should load first byte, then AND with second byte using memory operand
+; GISel loads both values, zero-extends, then AND in 16-bit
 ; CHECK: sep #32
 ; CHECK: lda byte_a
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: sep #32
-; CHECK: and byte_b
+; CHECK: lda byte_b
 ; CHECK: rep #32
 ; CHECK: and #255
+; CHECK: and
 ; CHECK: rts
 define i16 @and_two_byte_loads() {
   %a = load i8, ptr @byte_a
@@ -43,9 +44,10 @@ define i16 @and_two_byte_loads() {
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: sep #32
-; CHECK: ora byte_b
+; CHECK: lda byte_b
 ; CHECK: rep #32
 ; CHECK: and #255
+; CHECK: ora
 ; CHECK: rts
 define i16 @or_two_byte_loads() {
   %a = load i8, ptr @byte_a
@@ -66,9 +68,10 @@ define i16 @or_two_byte_loads() {
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: sep #32
-; CHECK: eor byte_b
+; CHECK: lda byte_b
 ; CHECK: rep #32
 ; CHECK: and #255
+; CHECK: eor
 ; CHECK: rts
 define i16 @xor_two_byte_loads() {
   %a = load i8, ptr @byte_a
@@ -89,10 +92,11 @@ define i16 @xor_two_byte_loads() {
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: sep #32
-; CHECK: clc
-; CHECK: adc byte_b
+; CHECK: lda byte_b
 ; CHECK: rep #32
 ; CHECK: and #255
+; CHECK: clc
+; CHECK: adc
 ; CHECK: rts
 define i16 @add_two_byte_loads() {
   %a = load i8, ptr @byte_a
@@ -113,10 +117,11 @@ define i16 @add_two_byte_loads() {
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: sep #32
-; CHECK: sec
-; CHECK: sbc byte_b
+; CHECK: lda byte_b
 ; CHECK: rep #32
 ; CHECK: and #255
+; CHECK: sec
+; CHECK: sbc
 ; CHECK: rts
 define i16 @sub_two_byte_loads() {
   %a = load i8, ptr @byte_a
@@ -135,9 +140,10 @@ define i16 @sub_two_byte_loads() {
 @word_b = global i16 3
 
 ; CHECK-LABEL: and_two_word_loads:
-; 16-bit case should use simple lda/and pattern (no mode switching)
+; 16-bit case should use lda/ldx then AND via DP scratch
 ; CHECK: lda word_a
-; CHECK: and word_b
+; CHECK: ldx word_b
+; CHECK: and
 ; CHECK: rts
 define i16 @and_two_word_loads() {
   %a = load i16, ptr @word_a

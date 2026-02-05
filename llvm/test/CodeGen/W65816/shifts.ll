@@ -69,12 +69,12 @@ define i16 @lshr_15(i16 %a) {
   ret i16 %r
 }
 
-; Test that icmp slt with 0 also uses the optimized lshr 15 pattern
-; (LLVM optimizer transforms val < 0 to (lshr val, 15) != 0)
+; Test icmp slt with 0 - GISel uses signed compare + select pattern
 ; CHECK-LABEL: test_slt_zero:
-; CHECK: asl a
-; CHECK-NEXT: lda #0
-; CHECK-NEXT: rol a
+; CHECK: ldx #1
+; CHECK: ldy #0
+; CHECK: cmp #0
+; CHECK: bvs
 ; CHECK: rts
 define i16 @test_slt_zero(i16 %val) {
   %cmp = icmp slt i16 %val, 0
@@ -87,6 +87,8 @@ define i16 @test_slt_zero(i16 %val) {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: shl_var:
+; CHECK: cpx #0
+; CHECK: beq
 ; CHECK: asl a
 ; CHECK: dex
 ; CHECK: bne
@@ -97,6 +99,8 @@ define i16 @shl_var(i16 %a, i16 %n) {
 }
 
 ; CHECK-LABEL: lshr_var:
+; CHECK: cpx #0
+; CHECK: beq
 ; CHECK: lsr a
 ; CHECK: dex
 ; CHECK: bne

@@ -34,7 +34,7 @@ target triple = "w65816-unknown-none"
 ; CHECK-NEXT: ply
 ; CHECK-NEXT: plx
 ; CHECK-NEXT: pla
-; CHECK-NEXT: rti
+; CHECK-NEXT: rts
 define void @irq_handler() #0 {
 entry:
   ret void
@@ -55,7 +55,7 @@ entry:
 ; CHECK-NEXT: ply
 ; CHECK-NEXT: plx
 ; CHECK-NEXT: pla
-; CHECK-NEXT: rti
+; CHECK-NEXT: rts
 define void @irq_with_local() #0 {
 entry:
   %local = alloca i16

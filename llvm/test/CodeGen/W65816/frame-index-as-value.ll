@@ -12,10 +12,9 @@ declare void @use_ptr(ptr)
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: pass_stack_addr:
-; The frame index should be materialized using TSC + ADC
+; The frame index should be materialized using TSC + INC (offset=1, optimized from CLC+ADC#1)
 ; CHECK: tsc
-; CHECK: clc
-; CHECK: adc
+; CHECK-NEXT: inc a
 ; CHECK: jsr use_ptr
 define void @pass_stack_addr() {
   %var = alloca i16, align 2
@@ -31,8 +30,9 @@ define void @pass_stack_addr() {
 
 ; CHECK-LABEL: pass_struct_member_addr:
 ; CHECK: tsc
+; CHECK-NEXT: inc a
 ; CHECK: clc
-; CHECK: adc
+; CHECK-NEXT: adc #2
 ; CHECK: jsr use_ptr
 define void @pass_struct_member_addr() {
   %s = alloca %struct.pair, align 2
@@ -50,9 +50,6 @@ define void @pass_struct_member_addr() {
 ; CHECK: clc
 ; CHECK: adc
 ; CHECK: jsr use_ptr
-; CHECK: tsc
-; CHECK: clc
-; CHECK: adc
 ; CHECK: jsr use_ptr
 define void @multiple_stack_addrs() {
   %a = alloca i16, align 2

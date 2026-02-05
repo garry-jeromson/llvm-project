@@ -260,35 +260,9 @@ def store_op : PatFrag<(ops node:$val, node:$ptr), (store node:$val, node:$ptr)>
 // W65816 Target-Specific SDNode Definitions
 //===----------------------------------------------------------------------===//
 
-// SDT for call instructions (both use i16 address, JSL encodes 24-bit internally)
-def SDT_W65816Call : SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>;
-
-def retflag : SDNode<"W65816ISD::RET_FLAG", SDTNone,
-                     [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
-
-// Near call (JSR - 16-bit address)
-def W65816call : SDNode<"W65816ISD::CALL", SDT_W65816Call,
-                        [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
-
-// Far call (JSL - 24-bit address, uses i16 in DAG but JSL encodes 24-bit)
-def W65816far_call : SDNode<"W65816ISD::FAR_CALL", SDT_W65816Call,
-                            [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
-
-def W65816Wrapper : SDNode<"W65816ISD::WRAPPER", SDTIntUnaryOp>;
-
-// Compare - takes two operands and produces flag output
-def SDT_W65816Cmp : SDTypeProfile<0, 2, [SDTCisSameAs<0, 1>]>;
-def W65816cmp : SDNode<"W65816ISD::CMP", SDT_W65816Cmp, [SDNPOutGlue]>;
-
-// Select CC - takes trueVal, falseVal, condCode, and flag input
-def SDT_W65816SelectCC : SDTypeProfile<1, 3, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>]>;
-def W65816selectcc : SDNode<"W65816ISD::SELECT_CC", SDT_W65816SelectCC,
-                            [SDNPInGlue]>;
-
-// Branch conditional - takes chain, dest, condcode, and flag input
-def SDT_W65816BrCond : SDTypeProfile<0, 2, [SDTCisVT<0, OtherVT>, SDTCisVT<1, i8>]>;
-def W65816brcond : SDNode<"W65816ISD::BRCOND", SDT_W65816BrCond,
-                          [SDNPHasChain, SDNPInGlue]>;
+// Note: SDAG-specific SDNode definitions (retflag, W65816call, W65816far_call,
+// W65816Wrapper, W65816cmp, W65816selectcc, W65816brcond) have been removed.
+// GlobalISel is the sole instruction selector.
 
 //===----------------------------------------------------------------------===//
 // Accumulator Load/Store Instructions (16-bit mode, M=0)
@@ -370,6 +344,51 @@ let mayLoad = 1, hasSideEffects = 0, Defs = [P] in {
 let mayStore = 1, hasSideEffects = 0 in {
   def SPILL_GPR16 : Pseudo<(outs), (ins GPR16:$src, i16imm:$fi),
                            "# SPILL_GPR16 $src, $fi", []>;
+}
+
+// LOAD8_ZEXT_GPR16_abs - Load 8-bit from absolute address, zero-extend to 16-bit
+// Folds G_LOAD(i8) + G_ZEXT(i16) into a single pseudo that outputs GPR16.
+// This avoids the ACC16 constraint of LDA8_abs when multiple loads are live.
+// Expanded to: SEP #$20; LDA addr; REP #$20; AND #$00FF; (+ transfer if needed)
+let Defs = [A, P], mayLoad = 1, hasSideEffects = 0 in {
+  def LOAD8_ZEXT_GPR16_abs : Pseudo<(outs GPR16:$dst), (ins addr16:$addr),
+                                    "# LOAD8_ZEXT_GPR16_abs $dst, $addr", []>;
+}
+
+// ZEXT8_GPR16 - Zero-extend 8-bit value to 16-bit in any GPR16 register
+// The key difference from AND16rr: NO tied operand between src and dst.
+// This allows the register allocator to place src and dst in different
+// physical registers, avoiding ACC16 pressure propagation through coalescing.
+// Defs=[A] tells the RA that A is always clobbered (used internally for AND).
+let Defs = [A, P], hasSideEffects = 0 in {
+  def ZEXT8_GPR16 : Pseudo<(outs GPR16:$dst), (ins GPR16:$src),
+                            "# ZEXT8_GPR16 $dst, $src", []>;
+}
+
+// SEXT8_GPR16 - Sign-extend 8-bit value to 16-bit in any GPR16 register
+// Similar to ZEXT8_GPR16 but does sign extension instead of zero extension.
+// Expanded to: get src to A, BIT #$0080, BEQ +4, ORA #$FF00, transfer to dst
+// OR: get src to A, AND #$00FF, XBA, ORA #$FF00, XBA, ... (sign bit check)
+// Simplest: AND #$00FF, then if bit 7 set: ORA #$FF00
+let Defs = [A, P], hasSideEffects = 0 in {
+  def SEXT8_GPR16 : Pseudo<(outs GPR16:$dst), (ins GPR16:$src),
+                            "# SEXT8_GPR16 $dst, $src", []>;
+}
+
+// LOAD_GPR16_abs - Load from absolute address to any GPR16 register
+// Expanded to: LDA_abs (A), LDX_abs (X), LDY_abs (Y), or LDA_abs+STA_dp (imag)
+// This avoids the ACC16 constraint of LDA_abs, giving the allocator flexibility.
+let mayLoad = 1, hasSideEffects = 0, Defs = [P] in {
+  def LOAD_GPR16_abs : Pseudo<(outs GPR16:$dst), (ins addr16:$addr),
+                              "# LOAD_GPR16_abs $dst, $addr", []>;
+}
+
+// STORE_GPR16_abs - Store from any GPR16 register to absolute address
+// Expanded to: STA_abs (A), STX_abs (X), STY_abs (Y), or LDA_dp+STA_abs (imag)
+// This avoids the ACC16 constraint of STA_abs, giving the allocator flexibility.
+let mayStore = 1, hasSideEffects = 0 in {
+  def STORE_GPR16_abs : Pseudo<(outs), (ins GPR16:$src, addr16:$addr),
+                               "# STORE_GPR16_abs $src, $addr", []>;
 }
 
 // LDA_sr_off - Load from frame index + constant offset
@@ -1495,13 +1514,6 @@ let isCall = 1 in {
   }
 }
 
-// Call patterns - the variadic operands (argument registers) are handled
-// automatically when the pattern matcher sees the SDNPVariadic SDNode
-def : Pat<(W65816call (i16 tglobaladdr:$addr)), (JSR tglobaladdr:$addr)>;
-def : Pat<(W65816call (i16 texternalsym:$addr)), (JSR texternalsym:$addr)>;
-def : Pat<(W65816far_call (i16 tglobaladdr:$addr)), (JSL tglobaladdr:$addr)>;
-def : Pat<(W65816far_call (i16 texternalsym:$addr)), (JSL texternalsym:$addr)>;
-
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
   // RTS - Return from Subroutine
   def RTS : W65816Inst8<0x60, (outs), (ins), "rts", []> {
@@ -1738,8 +1750,7 @@ def COP : W65816Inst16<0x02, (outs), (ins imm8:$imm),
 
 // Return pseudo - will be lowered to RTS or RTL
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
-  def RETW : Pseudo<(outs), (ins), "# RETW",
-                    [(retflag)]>;
+  def RETW : Pseudo<(outs), (ins), "# RETW", []>;
 }
 
 // 16-bit add pseudo - will need to expand to CLC + ADC sequence
@@ -1750,6 +1761,8 @@ let Defs = [P], Constraints = "$src1 = $dst" in {
   // The expansion code handles moving the result from A to X/Y if needed.
   // The two-address constraint ($src1 = $dst) tells the register allocator
   // that the output must share a register with src1, reducing register pressure.
+  // NOTE: A is not in Defs to avoid register pressure on our 3-register arch.
+  // The expansion code uses LivePhysRegs to save/restore A when live.
   def ADD16rr : Pseudo<(outs GPR16:$dst), (ins GPR16:$src1, GPR16:$src2),
                        "# ADD16rr",
                        [(set GPR16:$dst, (add GPR16:$src1, GPR16:$src2))]>;
@@ -1768,6 +1781,18 @@ let Defs = [P], Constraints = "$src = $dst" in {
   def SUB16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$imm),
                        "# SUB16ri",
                        [(set GPR16:$dst, (sub GPR16:$src, imm:$imm))]>;
+
+  def AND16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$imm),
+                       "# AND16ri",
+                       [(set GPR16:$dst, (and GPR16:$src, imm:$imm))]>;
+
+  def OR16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$imm),
+                      "# OR16ri",
+                      [(set GPR16:$dst, (or GPR16:$src, imm:$imm))]>;
+
+  def XOR16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$imm),
+                       "# XOR16ri",
+                       [(set GPR16:$dst, (xor GPR16:$src, imm:$imm))]>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1807,10 +1832,7 @@ let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
 let usesCustomInserter = 1, Uses = [P] in {
   def Select16 : Pseudo<(outs GPR16:$dst),
                         (ins GPR16:$trueVal, GPR16:$falseVal, i16imm:$cc),
-                        "# Select16 $dst, $trueVal, $falseVal, $cc",
-                        [(set GPR16:$dst,
-                          (W65816selectcc GPR16:$trueVal, GPR16:$falseVal,
-                                          (i16 imm:$cc)))]>;
+                        "# Select16 $dst, $trueVal, $falseVal, $cc", []>;
 }
 
 // Signed select pseudos - expanded in ExpandPseudo pass (after branch folding)
@@ -1835,6 +1857,21 @@ let Uses = [P] in {
   def Select16_ULE : Pseudo<(outs GPR16:$dst),
                             (ins GPR16:$trueVal, GPR16:$falseVal),
                             "# Select16_ULE $dst, $trueVal, $falseVal", []>;
+  // Simple condition selects (single branch instruction, expanded in ExpandPseudo)
+  // Used by GlobalISel since the generic Select16 uses usesCustomInserter
+  // which only works in SelectionDAG.
+  def Select16_EQ : Pseudo<(outs GPR16:$dst),
+                            (ins GPR16:$trueVal, GPR16:$falseVal),
+                            "# Select16_EQ $dst, $trueVal, $falseVal", []>;
+  def Select16_NE : Pseudo<(outs GPR16:$dst),
+                            (ins GPR16:$trueVal, GPR16:$falseVal),
+                            "# Select16_NE $dst, $trueVal, $falseVal", []>;
+  def Select16_CC : Pseudo<(outs GPR16:$dst),
+                            (ins GPR16:$trueVal, GPR16:$falseVal),
+                            "# Select16_CC $dst, $trueVal, $falseVal", []>;
+  def Select16_CS : Pseudo<(outs GPR16:$dst),
+                            (ins GPR16:$trueVal, GPR16:$falseVal),
+                            "# Select16_CS $dst, $trueVal, $falseVal", []>;
 }
 
 // Compare two registers pseudo - sets flags for subsequent branch
@@ -1842,22 +1879,19 @@ let Uses = [P] in {
 // NOTE: Clobbers A because comparison always uses A for the subtraction
 let Defs = [A, P] in {
   def CMP16rr : Pseudo<(outs), (ins GPR16:$src1, GPR16:$src2),
-                       "# CMP16rr $src1, $src2",
-                       [(W65816cmp GPR16:$src1, GPR16:$src2)]>;
+                       "# CMP16rr $src1, $src2", []>;
 
   // Compare register with immediate - more efficient for constants
   // Expands to: get src to A, cmp #imm
   // NOTE: Clobbers A because comparison uses A for the subtraction
   def CMP16ri : Pseudo<(outs), (ins GPR16:$src, i16imm:$imm),
-                       "# CMP16ri $src, $imm",
-                       [(W65816cmp GPR16:$src, imm:$imm)]>;
+                       "# CMP16ri $src, $imm", []>;
 }
 
 // Conditional branch pseudo - branches based on condition code
 let isBranch = 1, isTerminator = 1, Uses = [P] in {
   def BR_CC : Pseudo<(outs), (ins brtarget8:$target, i8imm:$cc),
-                     "# BR_CC $target, $cc",
-                     [(W65816brcond bb:$target, (i8 imm:$cc))]>;
+                     "# BR_CC $target, $cc", []>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1905,6 +1939,8 @@ let Defs = [P] in {
 // Output must be ACC16 (A register) since AND/ORA/EOR always produce result in A.
 // The two-address constraint ($src1 = $dst) tells the register allocator
 // that the output must share a register with src1, reducing register pressure.
+// NOTE: A is not in Defs to avoid register pressure on our 3-register arch.
+// The expansion code uses LivePhysRegs to save/restore A when live.
 let Defs = [P], Constraints = "$src1 = $dst" in {
   // These pseudos output to GPR16 to give the register allocator flexibility.
   // The expansion code handles moving the result from A to X/Y if needed.

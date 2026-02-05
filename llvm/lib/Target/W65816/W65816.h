@@ -18,18 +18,28 @@
 
 namespace llvm {
 
+class InstructionSelector;
+class W65816RegisterBankInfo;
+class W65816Subtarget;
 class W65816TargetMachine;
 class FunctionPass;
 class PassRegistry;
 
-FunctionPass *createW65816ISelDag(W65816TargetMachine &TM,
-                                  CodeGenOptLevel OptLevel);
 FunctionPass *createW65816ExpandPseudoPass();
 FunctionPass *createW65816PeepholeOptPass();
 
-void initializeW65816DAGToDAGISelLegacyPass(PassRegistry &);
+FunctionPass *createW65816PreLegalizerCombiner();
+FunctionPass *createW65816PostLegalizerCombiner();
+
+InstructionSelector *
+createW65816InstructionSelector(const W65816TargetMachine &,
+                                const W65816Subtarget &,
+                                const W65816RegisterBankInfo &);
+
 void initializeW65816ExpandPseudoPass(PassRegistry &);
 void initializeW65816PeepholeOptPass(PassRegistry &);
+void initializeW65816PreLegalizerCombinerPass(PassRegistry &);
+void initializeW65816PostLegalizerCombinerPass(PassRegistry &);
 
 } // namespace llvm
 

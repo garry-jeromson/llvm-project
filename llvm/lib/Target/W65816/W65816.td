@@ -69,6 +69,7 @@ def : Proc<"snes", [FeatureSNES, FeatureLongAddressing]>;
 //===----------------------------------------------------------------------===//
 
 include "W65816RegisterInfo.td"
+include "GISel/W65816RegisterBanks.td"
 
 //===----------------------------------------------------------------------===//
 // Calling Convention Description

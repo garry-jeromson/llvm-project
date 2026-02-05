@@ -11,9 +11,10 @@ target triple = "w65816-unknown-none"
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: i8_sgt_branch:
-; Sign extension from i8 to i16 uses XBA-based shift-by-8, then compare with 0
-; CHECK: xba
-; CHECK: cmp
+; GISel uses AND+EOR+SBC pattern for sign extension and comparison
+; CHECK: and #255
+; CHECK: eor #128
+; CHECK: sbc
 ; CHECK: rts
 define i16 @i8_sgt_branch(i8 %v) {
 entry:

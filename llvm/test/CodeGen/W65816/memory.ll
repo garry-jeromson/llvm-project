@@ -32,9 +32,11 @@ define void @store_global(i16 %val) {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: load_array_var:
+; GISel uses indirect addressing for array access
+; CHECK: ldx #global_array
 ; CHECK: asl a
-; CHECK: tax
-; CHECK: lda global_array,x
+; CHECK: tay
+; CHECK: lda (${{[0-9]+}},s),y
 ; CHECK: rts
 define i16 @load_array_var(i16 %idx) {
   %ptr = getelementptr [10 x i16], ptr @global_array, i16 0, i16 %idx
@@ -69,8 +71,11 @@ define void @store_indirect(ptr %ptr, i16 %val) {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: double_deref:
+; CHECK: sta {{[0-9]+}},s
+; CHECK: ldy #0
 ; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: sta {{[0-9]+}},s
+; CHECK: ldy #0
 ; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rts
 define i16 @double_deref(ptr %ptr) {

@@ -46,8 +46,7 @@ define void @store_bool(i16 %v) {
 ; CHECK: lda bool_var
 ; CHECK: rep #32
 ; CHECK: and #255
-; CHECK: and #1
-; CHECK: cmp #1
+; CHECK: eor #1
 ; CHECK: bne
 define i16 @branch_on_bool() {
 entry:
@@ -67,7 +66,11 @@ if.false:
 
 ; CHECK-LABEL: bool_from_cmp:
 ; The comparison result is stored as a boolean (0 or 1)
-; CHECK: and #1
+; GISel uses Select pattern for icmp eq, then masks via DP scratch and stores
+; CHECK: ldy #1
+; CHECK: sbc
+; CHECK: bne
+; CHECK: and
 ; CHECK: sep #32
 ; CHECK: sta bool_var
 ; CHECK: rep #32
@@ -87,9 +90,11 @@ define void @bool_from_cmp(i16 %a, i16 %b) {
 @struct_var = global %struct.with_bool zeroinitializer
 
 ; CHECK-LABEL: load_struct_bool:
-; The bool is at offset 2 in the struct
+; The bool is at offset 2 in the struct - GISel uses indirect addressing
+; CHECK: lda #struct_var
 ; CHECK: sep #32
-; CHECK: lda struct_var+2
+; CHECK: ldy #2
+; CHECK: lda (${{[0-9]+}},s),y
 ; CHECK: rep #32
 ; CHECK: and #255
 ; CHECK: and #1
@@ -123,8 +128,8 @@ define void @store_struct_bool(i16 %v) {
 ; CHECK: lda bool_var
 ; CHECK: rep #32
 ; CHECK: and #255
-; Full 16-bit NOT (eor #65535) then mask to get single-bit NOT
-; CHECK: eor #65535
+; GISel XORs with 1 directly (single-bit NOT) then masks
+; CHECK: eor #1
 ; CHECK: and #1
 ; CHECK: rts
 define i16 @bool_not() {

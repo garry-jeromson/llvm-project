@@ -54,6 +54,17 @@
 //    - CLC; ADC #1 -> INC A (saves 2 bytes, 2 cycles)
 //    - SEC; SBC #1 -> DEC A (saves 2 bytes, 2 cycles)
 //
+// 11. Complementing conditional branch + BRA pairs:
+//    - Bcond .next; BRA .other -> B!cond .other (when .next is fall-through)
+//
+// 12. Simplifying compound branch sequences:
+//    - CMP #N; BEQ target; BCC target -> CMP #(N+1); BCC target (ULE to ULT)
+//    - BEQ target; BCS target -> BCS target (BEQ redundant, UGE)
+//
+// 13. Eliminating redundant CMP #0:
+//    - LDA ...; CMP #0; BEQ/BNE -> LDA ...; BEQ/BNE (flags already set)
+//    - AND/ORA/EOR ...; CMP #0; BEQ/BNE -> AND/ORA/EOR ...; BEQ/BNE
+//
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/W65816MCTargetDesc.h"
@@ -151,8 +162,11 @@ static bool isCancellingSepRepPair(MachineInstr &First, MachineInstr &Second) {
 static bool isLoadImmZero(MachineInstr &MI) {
   if (MI.getOpcode() != W65816::LDA_imm16)
     return false;
-  if (MI.getNumOperands() > 0 && MI.getOperand(0).isImm())
-    return MI.getOperand(0).getImm() == 0;
+  // The immediate operand position varies. Scan for it.
+  for (unsigned i = 0; i < MI.getNumOperands(); ++i) {
+    if (MI.getOperand(i).isImm())
+      return MI.getOperand(i).getImm() == 0;
+  }
   return false;
 }
 
@@ -166,8 +180,12 @@ static bool isAddSubImm1(MachineInstr &MI, bool &IsAdd) {
   } else {
     return false;
   }
-  if (MI.getNumOperands() > 0 && MI.getOperand(0).isImm())
-    return MI.getOperand(0).getImm() == 1;
+  // The immediate operand position varies depending on how the instruction
+  // was created (with or without tied source register). Scan for it.
+  for (unsigned i = 0; i < MI.getNumOperands(); ++i) {
+    if (MI.getOperand(i).isImm())
+      return MI.getOperand(i).getImm() == 1;
+  }
   return false;
 }
 
@@ -175,12 +193,11 @@ static bool isAddSubImm1(MachineInstr &MI, bool &IsAdd) {
 static int getDPAddress(MachineInstr &MI) {
   unsigned Opcode = MI.getOpcode();
   if (Opcode == W65816::STA_dp || Opcode == W65816::LDA_dp) {
-    // DP instructions have the address as an operand
-    // STA_dp: (outs), (ins ACC16:$src, addr8dp:$imm)
-    // LDA_dp: (outs ACC16:$dst), (ins addr8dp:$imm)
-    unsigned OpIdx = (Opcode == W65816::STA_dp) ? 1 : 0;
-    if (MI.getNumOperands() > OpIdx && MI.getOperand(OpIdx).isImm())
-      return MI.getOperand(OpIdx).getImm();
+    // DP instructions have the address at operand index 1:
+    // STA_dp: operand 0 = $src (reg), operand 1 = addr (imm)
+    // LDA_dp: operand 0 = $dst (reg), operand 1 = addr (imm)
+    if (MI.getNumOperands() > 1 && MI.getOperand(1).isImm())
+      return MI.getOperand(1).getImm();
   }
   return -1;
 }
@@ -382,10 +399,8 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
                           << "  " << NextMI);
         const TargetInstrInfo *TII =
             MBB.getParent()->getSubtarget().getInstrInfo();
-        // INC_A takes ACC16 input and produces ACC16 output
-        // The ADC instruction uses A implicitly, so we do the same
-        BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(W65816::INC_A))
-            .addReg(W65816::A)
+        // INC_A: (outs ACC16:$dst), (ins ACC16:$src), $src = $dst
+        BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(W65816::INC_A), W65816::A)
             .addReg(W65816::A);
         // Remove both CLC and ADC
         auto AfterNext = std::next(NextMBBI);
@@ -405,9 +420,8 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
                           << "  " << NextMI);
         const TargetInstrInfo *TII =
             MBB.getParent()->getSubtarget().getInstrInfo();
-        // DEC_A takes ACC16 input and produces ACC16 output
-        BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(W65816::DEC_A))
-            .addReg(W65816::A)
+        // DEC_A: (outs ACC16:$dst), (ins ACC16:$src), $src = $dst
+        BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(W65816::DEC_A), W65816::A)
             .addReg(W65816::A);
         // Remove both SEC and SBC
         auto AfterNext = std::next(NextMBBI);
@@ -419,14 +433,204 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
       }
     }
 
+    // Check for TYA; INC_A; TAY -> INY / TXA; INC_A; TAX -> INX
+    // These patterns arise from ADD16ri expansion for index register increment.
+    // Also handles DEC_A variants -> DEY/DEX.
+    // Only safe when A's intermediate value is not used after the sequence.
+    if ((Opcode == W65816::TYA || Opcode == W65816::TXA) &&
+        (NextOpcode == W65816::INC_A || NextOpcode == W65816::DEC_A)) {
+      auto ThirdIt = std::next(NextMBBI);
+      if (ThirdIt != MBB.end()) {
+        unsigned ThirdOpc = ThirdIt->getOpcode();
+        bool IsY = (Opcode == W65816::TYA);
+        unsigned ExpectedTransfer = IsY ? W65816::TAY : W65816::TAX;
+        if (ThirdOpc == ExpectedTransfer) {
+          // Check if A is dead after the third instruction (TAX/TAY).
+          // INY/INX don't modify A, so if A was expected to hold the
+          // incremented value after the sequence, we can't replace.
+          bool AIsDeadAfter = true;
+          auto AfterThird = std::next(ThirdIt);
+          if (AfterThird != MBB.end()) {
+            // Quick check: if the next instruction reads A, A is live.
+            unsigned AfterOpc = AfterThird->getOpcode();
+            // Instructions that explicitly read A
+            if (AfterOpc == W65816::TAX || AfterOpc == W65816::TAY ||
+                AfterOpc == W65816::PHA || AfterOpc == W65816::STA_dp ||
+                AfterOpc == W65816::STA_abs || AfterOpc == W65816::STA_sr ||
+                AfterOpc == W65816::ADC_imm16 ||
+                AfterOpc == W65816::SBC_imm16 ||
+                AfterOpc == W65816::AND_imm16 ||
+                AfterOpc == W65816::ORA_imm16 ||
+                AfterOpc == W65816::EOR_imm16 ||
+                AfterOpc == W65816::CMP_imm16 || AfterOpc == W65816::CMP_abs ||
+                AfterOpc == W65816::CMP_dp) {
+              AIsDeadAfter = false;
+            }
+          }
+          if (AIsDeadAfter) {
+            unsigned NewOpc;
+            if (NextOpcode == W65816::INC_A) {
+              NewOpc = IsY ? W65816::INY : W65816::INX;
+            } else {
+              NewOpc = IsY ? W65816::DEY : W65816::DEX;
+            }
+            LLVM_DEBUG(dbgs() << "Replacing transfer-inc/dec-transfer with "
+                              << (IsY ? "INY/DEY" : "INX/DEX") << "\n");
+            const TargetInstrInfo *TII =
+                MBB.getParent()->getSubtarget().getInstrInfo();
+            BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(NewOpc));
+            auto AfterIt = std::next(ThirdIt);
+            MBB.erase(MBBI);
+            MBB.erase(NextMBBI);
+            MBB.erase(ThirdIt);
+            MBBI = AfterIt;
+            Modified = true;
+            continue;
+          }
+        }
+      }
+    }
+
+    // Check for redundant CMP #0 after flag-setting instructions.
+    // LDA/AND/ORA/EOR already set Z and N flags, so CMP #0 is redundant
+    // when ALL following branch instructions only test Z or N flags.
+    // We must NOT eliminate CMP #0 if any following branch uses V (BVS/BVC)
+    // or C (BCS/BCC) flags, since LDA doesn't set those correctly for
+    // comparison purposes (signed comparison patterns use BVS).
+    if (Opcode == W65816::CMP_imm16 && MI.getNumOperands() > 1 &&
+        MI.getOperand(1).isImm() && MI.getOperand(1).getImm() == 0) {
+      // Scan all following branch instructions in this block to ensure
+      // none use V or C flags.
+      bool AllBranchesUseOnlyZN = true;
+      bool HasBranch = false;
+      for (auto ScanIt = NextMBBI; ScanIt != MBB.end(); ++ScanIt) {
+        unsigned ScanOpc = ScanIt->getOpcode();
+        if (ScanOpc == W65816::BEQ || ScanOpc == W65816::BNE ||
+            ScanOpc == W65816::BMI || ScanOpc == W65816::BPL) {
+          HasBranch = true;
+          continue;
+        }
+        if (ScanOpc == W65816::BRA) {
+          // BRA is unconditional, doesn't use flags, but terminates the
+          // branch sequence.
+          break;
+        }
+        if (ScanOpc == W65816::BVS || ScanOpc == W65816::BVC ||
+            ScanOpc == W65816::BCS || ScanOpc == W65816::BCC) {
+          // These branches use V or C flags which LDA doesn't set correctly.
+          AllBranchesUseOnlyZN = false;
+          break;
+        }
+        // Non-branch instruction terminates the scan.
+        break;
+      }
+
+      if (HasBranch && AllBranchesUseOnlyZN && MBBI != MBB.begin()) {
+        auto PrevMBBI = std::prev(MBBI);
+        unsigned PrevOpc = PrevMBBI->getOpcode();
+        // These instructions set Z and N flags based on the result
+        if (PrevOpc == W65816::LDA_dp || PrevOpc == W65816::LDA_abs ||
+            PrevOpc == W65816::LDA_imm16 || PrevOpc == W65816::LDA_sr ||
+            PrevOpc == W65816::AND_dp || PrevOpc == W65816::AND_imm16 ||
+            PrevOpc == W65816::ORA_dp || PrevOpc == W65816::ORA_imm16 ||
+            PrevOpc == W65816::EOR_dp || PrevOpc == W65816::EOR_imm16) {
+          LLVM_DEBUG(dbgs() << "Removing redundant CMP #0 after flag-setting "
+                               "instruction:\n  "
+                            << MI);
+          MBB.erase(MBBI);
+          MBBI = NextMBBI;
+          Modified = true;
+          continue;
+        }
+      }
+    }
+
+    // Check for compound branch simplifications:
+    // BEQ target; BCC target (same target, ULE) ->
+    //   CMP #(N+1); BCC target (when preceded by CMP #N, N < 65535)
+    // BEQ target; BCS target (same target, UGE) ->
+    //   BCS target (BEQ is redundant since BCS covers equal case)
+    if (Opcode == W65816::BEQ &&
+        (NextOpcode == W65816::BCC || NextOpcode == W65816::BCS) &&
+        MI.getNumOperands() > 0 && MI.getOperand(0).isMBB() &&
+        NextMI.getNumOperands() > 0 && NextMI.getOperand(0).isMBB() &&
+        MI.getOperand(0).getMBB() == NextMI.getOperand(0).getMBB()) {
+
+      if (NextOpcode == W65816::BCS) {
+        // BEQ target; BCS target -> BCS target (BEQ redundant after CMP)
+        LLVM_DEBUG(dbgs() << "Removing redundant BEQ before BCS:\n  " << MI);
+        MBB.erase(MBBI);
+        MBBI = NextMBBI;
+        Modified = true;
+        continue;
+      }
+
+      // BEQ target; BCC target -> CMP/CPX/CPY #(N+1); BCC target
+      if (MBBI != MBB.begin()) {
+        auto PrevMBBI = std::prev(MBBI);
+        MachineInstr &PrevMI = *PrevMBBI;
+        unsigned PrevOpc = PrevMI.getOpcode();
+        if (PrevOpc == W65816::CMP_imm16 || PrevOpc == W65816::CPX_imm16 ||
+            PrevOpc == W65816::CPY_imm16) {
+          // For CPX/CPY, the immediate is operand 0 (no src register)
+          // For CMP_imm16, the immediate is operand 1 (operand 0 is src)
+          unsigned ImmIdx = (PrevOpc == W65816::CMP_imm16) ? 1 : 0;
+          if (PrevMI.getNumOperands() > ImmIdx &&
+              PrevMI.getOperand(ImmIdx).isImm()) {
+            int64_t OldImm = PrevMI.getOperand(ImmIdx).getImm();
+            if (OldImm < 65535) {
+              LLVM_DEBUG(dbgs()
+                         << "Normalizing ULE: CMP/CPX/CPY #" << OldImm
+                         << "; BEQ; BCC -> #" << (OldImm + 1) << "; BCC\n");
+              PrevMI.getOperand(ImmIdx).setImm(OldImm + 1);
+              MBB.erase(MBBI);
+              MBBI = NextMBBI;
+              Modified = true;
+              continue;
+            }
+          }
+        }
+      }
+    }
+
     ++MBBI;
   }
 
   return Modified;
 }
 
-/// Remove BRA instructions that branch to the fall-through block.
-/// These are redundant since execution would fall through anyway.
+/// Get the complemented branch opcode, or 0 if not a conditional branch.
+static unsigned getComplementBranch(unsigned Opcode) {
+  switch (Opcode) {
+  case W65816::BEQ:
+    return W65816::BNE;
+  case W65816::BNE:
+    return W65816::BEQ;
+  case W65816::BCS:
+    return W65816::BCC;
+  case W65816::BCC:
+    return W65816::BCS;
+  case W65816::BMI:
+    return W65816::BPL;
+  case W65816::BPL:
+    return W65816::BMI;
+  case W65816::BVS:
+    return W65816::BVC;
+  case W65816::BVC:
+    return W65816::BVS;
+  default:
+    return 0;
+  }
+}
+
+/// Remove BRA instructions that branch to the fall-through block, and
+/// complement conditional branch + BRA pairs.
+///
+/// Pattern: Bcond .Ltarget; BRA .Lother where .Ltarget is the next block
+/// becomes: B!cond .Lother (fall through to .Ltarget)
+///
+/// Pattern: BRA .Ltarget where .Ltarget is the next block
+/// becomes: (deleted, fall through)
 bool W65816PeepholeOpt::removeRedundantBranches(MachineFunction &MF) {
   bool Modified = false;
 
@@ -440,10 +644,38 @@ bool W65816PeepholeOpt::removeRedundantBranches(MachineFunction &MF) {
 
     MachineBasicBlock *NextMBB = &*NextMBBI;
 
-    // Check if the last instruction is a BRA to the next block
     if (MBB.empty())
       continue;
 
+    // Check for Bcond .Ltarget; BRA .Lother where .Ltarget is next block.
+    // Replace with B!cond .Lother (complemented condition, fall through).
+    if (MBB.size() >= 2) {
+      MachineInstr &LastMI = MBB.back();
+      MachineInstr &PrevMI = *std::prev(MBB.end(), 2);
+
+      unsigned CompOpc = getComplementBranch(PrevMI.getOpcode());
+      if (CompOpc && LastMI.getOpcode() == W65816::BRA &&
+          PrevMI.getNumOperands() > 0 && PrevMI.getOperand(0).isMBB() &&
+          LastMI.getNumOperands() > 0 && LastMI.getOperand(0).isMBB()) {
+        MachineBasicBlock *CondTarget = PrevMI.getOperand(0).getMBB();
+        if (CondTarget == NextMBB) {
+          // Bcond .next; BRA .other -> B!cond .other
+          MachineBasicBlock *BraTarget = LastMI.getOperand(0).getMBB();
+          LLVM_DEBUG(dbgs()
+                     << "Complementing branch: " << PrevMI << "  " << LastMI);
+          const TargetInstrInfo *TII =
+              MBB.getParent()->getSubtarget().getInstrInfo();
+          BuildMI(MBB, PrevMI, PrevMI.getDebugLoc(), TII->get(CompOpc))
+              .addMBB(BraTarget);
+          PrevMI.eraseFromParent();
+          LastMI.eraseFromParent();
+          Modified = true;
+          continue;
+        }
+      }
+    }
+
+    // Check if the last instruction is a BRA to the next block
     MachineInstr &LastMI = MBB.back();
     if (LastMI.getOpcode() != W65816::BRA)
       continue;
@@ -465,13 +697,22 @@ bool W65816PeepholeOpt::removeRedundantBranches(MachineFunction &MF) {
 bool W65816PeepholeOpt::runOnMachineFunction(MachineFunction &MF) {
   bool Modified = false;
 
-  // First pass: optimize within each basic block
-  for (MachineBasicBlock &MBB : MF) {
-    Modified |= optimizeMBB(MBB);
-  }
+  // Run passes in a loop until convergence. Branch complement
+  // (removeRedundantBranches) can create new patterns that optimizeMBB
+  // can simplify (e.g., BEQ+BCS→BCC complement creates BEQ+BCC same-target
+  // patterns that ULE normalization can fold).
+  bool Changed;
+  do {
+    Changed = false;
 
-  // Second pass: remove redundant branches between blocks
-  Modified |= removeRedundantBranches(MF);
+    for (MachineBasicBlock &MBB : MF) {
+      Changed |= optimizeMBB(MBB);
+    }
+
+    Changed |= removeRedundantBranches(MF);
+
+    Modified |= Changed;
+  } while (Changed);
 
   return Modified;
 }
