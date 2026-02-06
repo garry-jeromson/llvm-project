@@ -123,23 +123,29 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
     // PHB - Save current data bank
     BuildMI(MBB, MBBI, DL, TII.get(W65816::PHB))
         .setMIFlag(MachineInstr::FrameSetup);
-    // To set DBR, we need to push the bank number as a single byte and PLB
-    // In 16-bit A mode, PHA pushes 2 bytes but PLB pulls 1 byte.
-    // The approach: load bank into low byte, use XBA to swap bytes,
-    // then PHA pushes [lowbyte][highbyte], and PLB pulls the highbyte
-    // which was originally our bank value.
-    //
-    // Simpler approach: load bank value, use PEA to push 2 bytes,
-    // then PLB pulls the low byte.
-    // PEA pushes its operand as an immediate 16-bit value.
-    // Stack after PEA: [lo][hi] (hi at lower address, little-endian)
-    // PLB pulls from TOS, which is the lo byte.
-    BuildMI(MBB, MBBI, DL, TII.get(W65816::PEA))
-        .addImm(Bank) // Only low byte matters for PLB
+    // To set DBR, we use 8-bit index mode to push exactly 1 byte:
+    // 1. Save X (which may contain a function argument)
+    // 2. Switch to 8-bit index mode
+    // 3. Load bank value into X (8-bit)
+    // 4. Push X (1 byte)
+    // 5. PLB to set data bank
+    // 6. Switch back to 16-bit index mode
+    // 7. Restore X
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PHX))
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::SEP))
+        .addImm(0x10) // 8-bit index mode
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::LDX_imm8_x8), W65816::XL)
+        .addImm(Bank)
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PHX))
         .setMIFlag(MachineInstr::FrameSetup);
     BuildMI(MBB, MBBI, DL, TII.get(W65816::PLB))
         .setMIFlag(MachineInstr::FrameSetup);
-    // Remove the extra byte from stack (PLB only pulled 1 of the 2 bytes)
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::REP))
+        .addImm(0x10) // Back to 16-bit index mode
+        .setMIFlag(MachineInstr::FrameSetup);
     BuildMI(MBB, MBBI, DL, TII.get(W65816::PLX))
         .setMIFlag(MachineInstr::FrameSetup);
   }

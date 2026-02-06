@@ -6,10 +6,14 @@ target triple = "w65816-unknown-none"
 
 ; Function with data bank attribute - should emit PHB/PLB
 ; CHECK-LABEL: bank1_function:
-; Prologue: save DBR and set to bank 1
+; Prologue: save DBR, save X (argument), set bank 1 via 8-bit mode, restore X
 ; CHECK: phb
-; CHECK: pea $0001
+; CHECK: phx
+; CHECK: sep #16
+; CHECK: ldx #1
+; CHECK: phx
 ; CHECK: plb
+; CHECK: rep #16
 ; CHECK: plx
 ; Function body (adds 100 to argument)
 ; CHECK: clc
@@ -35,8 +39,12 @@ define i16 @normal_function(i16 %x) {
 ; Function with bank 2
 ; CHECK-LABEL: bank2_function:
 ; CHECK: phb
-; CHECK: pea $0002
+; CHECK: phx
+; CHECK: sep #16
+; CHECK: ldx #2
+; CHECK: phx
 ; CHECK: plb
+; CHECK: rep #16
 ; CHECK: plx
 ; CHECK: plb
 ; CHECK: rts
