@@ -52,6 +52,15 @@ class W65816MachineFunctionInfo : public MachineFunctionInfo {
   /// Size of locals allocated in Direct Page (must be <= 256 bytes).
   unsigned DPFrameSize = 0;
 
+  /// Data bank number to set for this function (-1 means no bank switching).
+  /// When set to a non-negative value, the function prologue will:
+  /// 1. PHB - Push current data bank
+  /// 2. LDA #bank; PHA; PLB - Set new data bank
+  /// And the epilogue will:
+  /// 1. PLB - Restore previous data bank
+  /// Enabled via __attribute__((annotate("w65816_databank=N")))
+  int DataBank = -1;
+
 public:
   W65816MachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI) {
     // Check for interrupt handler attribute
@@ -77,6 +86,20 @@ public:
     // Check for far function attribute (uses JSL/RTL instead of JSR/RTS)
     // Usage: __attribute__((w65816_farfunc))
     IsFarFunction = F.hasFnAttribute("w65816_farfunc");
+
+    // Check for data bank attribute
+    // Usage: __attribute__((annotate("w65816_databank=N")))
+    // Parses "w65816_databank=N" and sets DataBank to N
+    if (F.hasFnAttribute("w65816_databank")) {
+      Attribute DBAttr = F.getFnAttribute("w65816_databank");
+      if (DBAttr.isStringAttribute()) {
+        StringRef BankStr = DBAttr.getValueAsString();
+        int Bank;
+        if (!BankStr.getAsInteger(10, Bank) && Bank >= 0 && Bank <= 255) {
+          DataBank = Bank;
+        }
+      }
+    }
   }
 
   MachineFunctionInfo *
@@ -111,6 +134,12 @@ public:
 
   /// Set the size of locals allocated in Direct Page.
   void setDPFrameSize(unsigned Size) { DPFrameSize = Size; }
+
+  /// Returns true if this function requires data bank switching.
+  bool hasDataBankAttribute() const { return DataBank >= 0; }
+
+  /// Get the data bank number for this function (-1 if not set).
+  int getDataBank() const { return DataBank; }
 };
 
 } // end namespace llvm

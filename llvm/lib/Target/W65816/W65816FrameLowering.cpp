@@ -115,6 +115,35 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
   while (MBBI != MBB.end() && MBBI->isDebugInstr())
     ++MBBI;
 
+  // Handle data bank switching if requested
+  // This is emitted first so that the function executes with the correct
+  // data bank for all memory accesses
+  if (AFI->hasDataBankAttribute()) {
+    int Bank = AFI->getDataBank();
+    // PHB - Save current data bank
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PHB))
+        .setMIFlag(MachineInstr::FrameSetup);
+    // To set DBR, we need to push the bank number as a single byte and PLB
+    // In 16-bit A mode, PHA pushes 2 bytes but PLB pulls 1 byte.
+    // The approach: load bank into low byte, use XBA to swap bytes,
+    // then PHA pushes [lowbyte][highbyte], and PLB pulls the highbyte
+    // which was originally our bank value.
+    //
+    // Simpler approach: load bank value, use PEA to push 2 bytes,
+    // then PLB pulls the low byte.
+    // PEA pushes its operand as an immediate 16-bit value.
+    // Stack after PEA: [lo][hi] (hi at lower address, little-endian)
+    // PLB pulls from TOS, which is the lo byte.
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PEA))
+        .addImm(Bank) // Only low byte matters for PLB
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PLB))
+        .setMIFlag(MachineInstr::FrameSetup);
+    // Remove the extra byte from stack (PLB only pulled 1 of the 2 bytes)
+    BuildMI(MBB, MBBI, DL, TII.get(W65816::PLX))
+        .setMIFlag(MachineInstr::FrameSetup);
+  }
+
   // Handle Direct Page frame functions
   // These use the 256-byte direct page region instead of the stack for locals
   if (AFI->usesDPFrame()) {
@@ -260,6 +289,11 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
       BuildMI(MBB, MBBI, DL, TII.get(W65816::PLD))
           .setMIFlag(MachineInstr::FrameDestroy);
     }
+    // Also restore data bank if it was switched
+    if (AFI->hasDataBankAttribute()) {
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::PLB))
+          .setMIFlag(MachineInstr::FrameDestroy);
+    }
     return;
   }
 
@@ -274,8 +308,9 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
 
   // For interrupt handlers with no stack allocation, still need to restore regs
   // Also continue if we have imaginary registers to restore for recursive
-  // functions
-  if (StackSize == 0 && !AFI->isInterruptOrNMIHandler() && ImagRegAddrs.empty())
+  // functions, or if we need to restore the data bank
+  if (StackSize == 0 && !AFI->isInterruptOrNMIHandler() &&
+      ImagRegAddrs.empty() && !AFI->hasDataBankAttribute())
     return;
 
   // Restore the stack pointer by adding back the stack size
@@ -374,6 +409,15 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
     BuildMI(MBB, TermMBBI, DL, TII.get(W65816::PLX))
         .setMIFlag(MachineInstr::FrameDestroy);
     BuildMI(MBB, TermMBBI, DL, TII.get(W65816::PLA))
+        .setMIFlag(MachineInstr::FrameDestroy);
+  }
+
+  // Restore data bank if it was switched
+  // This is done last so that all other epilogue code uses the function's
+  // data bank. The PHB was the first thing pushed, so PLB is last to pop.
+  if (AFI->hasDataBankAttribute()) {
+    MachineBasicBlock::iterator TermMBBI = MBB.getFirstTerminator();
+    BuildMI(MBB, TermMBBI, DL, TII.get(W65816::PLB))
         .setMIFlag(MachineInstr::FrameDestroy);
   }
 }
