@@ -39,9 +39,11 @@
 //    - LDA #imm; TAX -> LDX #imm (direct load is more efficient)
 //    - LDA #imm; TAY -> LDY #imm (direct load is more efficient)
 //
-// 7. Eliminating redundant SEP/REP mode switches:
+// 7. Eliminating and coalescing SEP/REP mode switches:
 //    - REP #N; SEP #N -> SEP #N (first is cancelled by second)
 //    - SEP #N; REP #N -> REP #N (first is cancelled by second)
+//    - SEP #M; SEP #N -> SEP #(M|N) (coalesce consecutive SEP)
+//    - REP #M; REP #N -> REP #(M|N) (coalesce consecutive REP)
 //
 // 8. Eliminating redundant DP load/store sequences:
 //    - STA dpN; LDA dpN -> (delete LDA, value already in A)
@@ -385,6 +387,38 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
       MBBI = NextMBBI;
       Modified = true;
       continue;
+    }
+
+    // Coalesce consecutive SEP instructions: SEP #M; SEP #N -> SEP #(M|N)
+    if (Opcode == W65816::SEP && NextOpcode == W65816::SEP) {
+      if (MI.getOperand(0).isImm() && NextMI.getOperand(0).isImm()) {
+        int64_t Mask1 = MI.getOperand(0).getImm();
+        int64_t Mask2 = NextMI.getOperand(0).getImm();
+        int64_t Combined = Mask1 | Mask2;
+        LLVM_DEBUG(dbgs() << "Coalescing SEP #" << Mask1 << "; SEP #" << Mask2
+                          << " -> SEP #" << Combined << "\n");
+        MI.getOperand(0).setImm(Combined);
+        MBB.erase(NextMBBI);
+        Modified = true;
+        // Don't advance - check for more coalescing
+        continue;
+      }
+    }
+
+    // Coalesce consecutive REP instructions: REP #M; REP #N -> REP #(M|N)
+    if (Opcode == W65816::REP && NextOpcode == W65816::REP) {
+      if (MI.getOperand(0).isImm() && NextMI.getOperand(0).isImm()) {
+        int64_t Mask1 = MI.getOperand(0).getImm();
+        int64_t Mask2 = NextMI.getOperand(0).getImm();
+        int64_t Combined = Mask1 | Mask2;
+        LLVM_DEBUG(dbgs() << "Coalescing REP #" << Mask1 << "; REP #" << Mask2
+                          << " -> REP #" << Combined << "\n");
+        MI.getOperand(0).setImm(Combined);
+        MBB.erase(NextMBBI);
+        Modified = true;
+        // Don't advance - check for more coalescing
+        continue;
+      }
     }
 
     // Check for redundant DP store/load pairs (STA dpN; LDA dpN)
