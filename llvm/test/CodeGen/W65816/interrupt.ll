@@ -80,4 +80,39 @@ entry:
   ret void
 }
 
+;===----------------------------------------------------------------------===;
+; Interrupt Handler with DP Frame
+;
+; Tests that DP frame functions correctly coexist with interrupt handlers.
+; The prologue order should be:
+;   rep #48, pha, phx, phy (save interrupt registers)
+;   phd, lda #0, tcd (set up DP frame)
+; The epilogue order should be:
+;   pld (restore D)
+;   rep #48, ply, plx, pla (restore interrupt registers)
+;   rti
+;===----------------------------------------------------------------------===;
+
+; CHECK-LABEL: irq_dpframe:
+; Prologue: save interrupt registers, then set up DP
+; CHECK: rep #48
+; CHECK-NEXT: pha
+; CHECK-NEXT: phx
+; CHECK-NEXT: phy
+; CHECK: phd
+; CHECK: lda #0
+; CHECK: tcd
+; Epilogue: restore D, then interrupt registers
+; CHECK: pld
+; CHECK: rep #48
+; CHECK-NEXT: ply
+; CHECK-NEXT: plx
+; CHECK-NEXT: pla
+; CHECK-NEXT: rts
+define void @irq_dpframe() #1 {
+entry:
+  ret void
+}
+
 attributes #0 = { "interrupt" }
+attributes #1 = { "interrupt" "w65816_dpframe" }

@@ -150,25 +150,6 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
         .setMIFlag(MachineInstr::FrameSetup);
   }
 
-  // Handle Direct Page frame functions
-  // These use the 256-byte direct page region instead of the stack for locals
-  if (AFI->usesDPFrame()) {
-    // If assume-d0 is set, D register is guaranteed to be 0, skip setup
-    if (!STI.assumeD0()) {
-      // Save D register (callee-saved requirement)
-      BuildMI(MBB, MBBI, DL, TII.get(W65816::PHD))
-          .setMIFlag(MachineInstr::FrameSetup);
-      // Set D to 0 (DP base at $0000)
-      BuildMI(MBB, MBBI, DL, TII.get(W65816::LDA_imm16), W65816::A)
-          .addImm(0)
-          .setMIFlag(MachineInstr::FrameSetup);
-      BuildMI(MBB, MBBI, DL, TII.get(W65816::TCD))
-          .setMIFlag(MachineInstr::FrameSetup);
-    }
-    // DP frame functions don't use stack allocation for locals
-    return;
-  }
-
   // For interrupt handlers, save all registers first
   // The 65816 interrupt sequence automatically pushes P and PC,
   // but we need to save A, X, Y ourselves
@@ -184,6 +165,25 @@ void W65816FrameLowering::emitPrologue(MachineFunction &MF,
         .setMIFlag(MachineInstr::FrameSetup);
     BuildMI(MBB, MBBI, DL, TII.get(W65816::PHY))
         .setMIFlag(MachineInstr::FrameSetup);
+  }
+
+  // Handle Direct Page frame functions
+  // These use the 256-byte direct page region instead of the stack for locals
+  if (AFI->usesDPFrame()) {
+    // If assume-d0 is set, D register is guaranteed to be 0, skip setup
+    if (!STI.assumeD0()) {
+      // Save D register (callee-saved requirement)
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::PHD))
+          .setMIFlag(MachineInstr::FrameSetup);
+      // Set D to 0 (DP base at $0000)
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::LDA_imm16), W65816::A)
+          .addImm(0)
+          .setMIFlag(MachineInstr::FrameSetup);
+      BuildMI(MBB, MBBI, DL, TII.get(W65816::TCD))
+          .setMIFlag(MachineInstr::FrameSetup);
+    }
+    // DP frame functions use direct page for locals, not the stack.
+    // StackSize will be 0, so the rest of the prologue is skipped naturally.
   }
 
   // For recursive functions, save imaginary registers in prologue.
@@ -289,18 +289,16 @@ void W65816FrameLowering::emitEpilogue(MachineFunction &MF,
     DL = MBBI->getDebugLoc();
 
   // Handle Direct Page frame functions - restore D register
+  // This must be done before interrupt register restores because D was pushed
+  // after the interrupt registers in the prologue
   if (AFI->usesDPFrame()) {
     // If assume-d0 is set, D register was never modified, skip restore
     if (!STI.assumeD0()) {
       BuildMI(MBB, MBBI, DL, TII.get(W65816::PLD))
           .setMIFlag(MachineInstr::FrameDestroy);
     }
-    // Also restore data bank if it was switched
-    if (AFI->hasDataBankAttribute()) {
-      BuildMI(MBB, MBBI, DL, TII.get(W65816::PLB))
-          .setMIFlag(MachineInstr::FrameDestroy);
-    }
-    return;
+    // For DP frame functions, StackSize is 0, so we fall through to handle
+    // interrupt handler restores and data bank restore below
   }
 
   uint64_t StackSize = MFI.getStackSize();
