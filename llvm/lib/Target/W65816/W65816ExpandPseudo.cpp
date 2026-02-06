@@ -4298,6 +4298,7 @@ bool W65816ExpandPseudo::expandMOV16ri_acc8(Block &MBB, BlockIt MBBI) {
 
 bool W65816ExpandPseudo::expandINC16(Block &MBB, BlockIt MBBI) {
   MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
 
   // INC16 $dst, $src (where $dst == $src due to constraint)
   // Expand to INC_A, INX, or INY based on allocated register
@@ -4312,10 +4313,35 @@ bool W65816ExpandPseudo::expandINC16(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::INY);
   } else if (W65816::IMAG16RegClass.contains(Reg)) {
     // Increment imaginary register: load to A, INC A, store back
+    // Must save/restore A if it's live after this instruction
     unsigned DPAddr = getImaginaryRegDPAddr(Reg);
+
+    // Check if A is live after this instruction
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+
+    static const unsigned INC_SCRATCH_DP = 0xFA;
+
+    if (ALive) {
+      // Save A to scratch DP location
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(INC_SCRATCH_DP);
+    }
+
     buildMI(MBB, MBBI, W65816::LDA_dp, W65816::A).addImm(DPAddr);
     buildMI(MBB, MBBI, W65816::INC_A);
     buildMI(MBB, MBBI, W65816::STA_dp).addReg(W65816::A).addImm(DPAddr);
+
+    if (ALive) {
+      // Restore A from scratch DP location
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(INC_SCRATCH_DP);
+    }
   } else {
     llvm_unreachable("INC16 with invalid register");
   }
@@ -4326,6 +4352,7 @@ bool W65816ExpandPseudo::expandINC16(Block &MBB, BlockIt MBBI) {
 
 bool W65816ExpandPseudo::expandDEC16(Block &MBB, BlockIt MBBI) {
   MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
 
   // DEC16 $dst, $src (where $dst == $src due to constraint)
   // Expand to DEC_A, DEX, or DEY based on allocated register
@@ -4340,10 +4367,35 @@ bool W65816ExpandPseudo::expandDEC16(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::DEY);
   } else if (W65816::IMAG16RegClass.contains(Reg)) {
     // Decrement imaginary register: load to A, DEC A, store back
+    // Must save/restore A if it's live after this instruction
     unsigned DPAddr = getImaginaryRegDPAddr(Reg);
+
+    // Check if A is live after this instruction
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    bool ALive = !LiveRegs.available(*MRI, W65816::A);
+
+    static const unsigned DEC_SCRATCH_DP = 0xFA;
+
+    if (ALive) {
+      // Save A to scratch DP location
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(DEC_SCRATCH_DP);
+    }
+
     buildMI(MBB, MBBI, W65816::LDA_dp, W65816::A).addImm(DPAddr);
     buildMI(MBB, MBBI, W65816::DEC_A);
     buildMI(MBB, MBBI, W65816::STA_dp).addReg(W65816::A).addImm(DPAddr);
+
+    if (ALive) {
+      // Restore A from scratch DP location
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(DEC_SCRATCH_DP);
+    }
   } else {
     llvm_unreachable("DEC16 with invalid register");
   }
