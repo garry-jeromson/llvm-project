@@ -29,20 +29,18 @@ void W65816ToolChain::addClangTargetOptions(
     const llvm::opt::ArgList &DriverArgs, llvm::opt::ArgStringList &CC1Args,
     Action::OffloadKind DeviceOffloadKind) const {
   // The W65816 has only 3 physical registers (A, X, Y). Code compiled without
-  // optimization (-O0) creates excessive register pressure that almost always
-  // causes "ran out of registers" errors. Require at least -O1.
+  // optimization (-O0) may have correctness issues due to value clobbering
+  // when multiple values need to flow through the accumulator.
   const Driver &D = getDriver();
 
   if (Arg *A = DriverArgs.getLastArg(options::OPT_O_Group)) {
-    // -O0 is explicitly unsupported
+    // -O0 is allowed but with a warning about potential issues
     if (A->getOption().matches(options::OPT_O0)) {
-      D.Diag(diag::err_drv_unsupported_opt_for_target)
+      D.Diag(diag::warn_drv_unsupported_opt_for_target)
           << "-O0" << getTriple().str();
     }
   } else {
-    // No optimization flag specified - default to -O1 instead of -O0
-    // This is necessary because the W65816's limited register set requires
-    // optimization passes to reduce register pressure.
+    // No optimization flag specified - default to -O1
     CC1Args.push_back("-O1");
   }
 }
