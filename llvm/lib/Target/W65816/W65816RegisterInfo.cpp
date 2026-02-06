@@ -108,8 +108,10 @@ bool W65816RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
       DPOpcode = W65816::STA_dp;
       break;
     case W65816::ADC_sr:
+      DPOpcode = W65816::ADC_dp;
+      break;
     case W65816::SBC_sr:
-      // ADC_dp/SBC_dp not defined - use stack-relative addressing
+      DPOpcode = W65816::SBC_dp;
       break;
     default:
       // Other instructions use stack-relative addressing
