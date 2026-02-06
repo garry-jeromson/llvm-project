@@ -65,6 +65,12 @@
 //    - LDA ...; CMP #0; BEQ/BNE -> LDA ...; BEQ/BNE (flags already set)
 //    - AND/ORA/EOR ...; CMP #0; BEQ/BNE -> AND/ORA/EOR ...; BEQ/BNE
 //
+// 14. Load-Use Folding (memory-direct operations):
+//    - LDA dp; INC A; STA dp -> INC dp (when A is dead after)
+//    - LDA dp; DEC A; STA dp -> DEC dp (when A is dead after)
+//    - LDA dp; ASL A; STA dp -> ASL dp (when A is dead after)
+//    - LDA dp; LSR A; STA dp -> LSR dp (when A is dead after)
+//
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/W65816MCTargetDesc.h"
@@ -200,6 +206,68 @@ static int getDPAddress(MachineInstr &MI) {
       return MI.getOperand(1).getImm();
   }
   return -1;
+}
+
+/// Get the DP memory version of an accumulator operation, or 0 if not foldable.
+/// Maps INC_A -> INC_dp, DEC_A -> DEC_dp, ASL_A -> ASL_dp, LSR_A -> LSR_dp.
+static unsigned getMemoryOpForAccOp(unsigned AccOp) {
+  switch (AccOp) {
+  case W65816::INC_A:
+    return W65816::INC_dp;
+  case W65816::DEC_A:
+    return W65816::DEC_dp;
+  case W65816::ASL_A:
+    return W65816::ASL_dp;
+  case W65816::LSR_A:
+    return W65816::LSR_dp;
+  default:
+    return 0;
+  }
+}
+
+/// Check if an instruction reads the A register.
+static bool readsA(unsigned Opcode) {
+  switch (Opcode) {
+  case W65816::TAX:
+  case W65816::TAY:
+  case W65816::PHA:
+  case W65816::STA_dp:
+  case W65816::STA_abs:
+  case W65816::STA_sr:
+  case W65816::STA_absX:
+  case W65816::STA_absY:
+  case W65816::STA_dpX:
+  case W65816::STA_dpIndY:
+  case W65816::STA_srIndY:
+  case W65816::ADC_imm16:
+  case W65816::ADC_dp:
+  case W65816::ADC_abs:
+  case W65816::SBC_imm16:
+  case W65816::SBC_dp:
+  case W65816::SBC_abs:
+  case W65816::AND_imm16:
+  case W65816::AND_dp:
+  case W65816::AND_abs:
+  case W65816::ORA_imm16:
+  case W65816::ORA_dp:
+  case W65816::ORA_abs:
+  case W65816::EOR_imm16:
+  case W65816::EOR_dp:
+  case W65816::EOR_abs:
+  case W65816::CMP_imm16:
+  case W65816::CMP_dp:
+  case W65816::CMP_abs:
+  case W65816::INC_A:
+  case W65816::DEC_A:
+  case W65816::ASL_A:
+  case W65816::LSR_A:
+  case W65816::ROL_A:
+  case W65816::ROR_A:
+  case W65816::XBA:
+    return true;
+  default:
+    return false;
+  }
 }
 
 bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
@@ -430,6 +498,76 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
         MBBI = AfterNext;
         Modified = true;
         continue;
+      }
+    }
+
+    // Check for Load-Use Folding: LDA dp; OP A; STA dp -> OP dp
+    // This is more efficient when A's value is not needed after the sequence.
+    // Works for INC, DEC, ASL, LSR.
+    if (Opcode == W65816::LDA_dp) {
+      unsigned MemOp = getMemoryOpForAccOp(NextOpcode);
+      if (MemOp) {
+        auto ThirdIt = std::next(NextMBBI);
+        if (ThirdIt != MBB.end() && ThirdIt->getOpcode() == W65816::STA_dp) {
+          int LoadAddr = getDPAddress(MI);
+          int StoreAddr = getDPAddress(*ThirdIt);
+          if (LoadAddr >= 0 && LoadAddr == StoreAddr) {
+            // Check if A is dead after the STA (i.e., not read before written)
+            // Scan forward until we find an instruction that reads or writes A.
+            bool AIsDeadAfter = true;
+            auto AfterThird = std::next(ThirdIt);
+            for (auto ScanIt = AfterThird; ScanIt != MBB.end() && AIsDeadAfter;
+                 ++ScanIt) {
+              unsigned ScanOpc = ScanIt->getOpcode();
+              // If instruction reads A before we find a write to A, A is live
+              if (readsA(ScanOpc)) {
+                AIsDeadAfter = false;
+                break;
+              }
+              // If instruction writes A (but doesn't read it), A is dead
+              if (ScanOpc == W65816::LDA_dp || ScanOpc == W65816::LDA_abs ||
+                  ScanOpc == W65816::LDA_imm16 || ScanOpc == W65816::LDA_sr ||
+                  ScanOpc == W65816::TXA || ScanOpc == W65816::TYA ||
+                  ScanOpc == W65816::PLA) {
+                break; // A is written, so it was dead after STA
+              }
+              // Branch/call terminates analysis - be conservative
+              if (ScanIt->isTerminator() || ScanIt->isCall()) {
+                // For terminators, check if A is live-out of the block
+                // For now, be conservative and assume A might be live
+                AIsDeadAfter = false;
+                break;
+              }
+            }
+            // Also be conservative if we hit end of block (A might be live-out)
+            if (AfterThird == MBB.end()) {
+              AIsDeadAfter = false;
+            }
+
+            if (AIsDeadAfter) {
+              LLVM_DEBUG(dbgs() << "Load-Use Folding: LDA dp; "
+                                << (NextOpcode == W65816::INC_A   ? "INC"
+                                    : NextOpcode == W65816::DEC_A ? "DEC"
+                                    : NextOpcode == W65816::ASL_A ? "ASL"
+                                                                  : "LSR")
+                                << " A; STA dp -> memory op:\n  " << MI << "  "
+                                << NextMI << "  " << *ThirdIt);
+              const TargetInstrInfo *TII =
+                  MBB.getParent()->getSubtarget().getInstrInfo();
+              // Build memory operation with same DP address
+              BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(MemOp))
+                  .addImm(LoadAddr);
+              // Remove all three instructions
+              auto AfterIt = std::next(ThirdIt);
+              MBB.erase(MBBI);
+              MBB.erase(NextMBBI);
+              MBB.erase(ThirdIt);
+              MBBI = AfterIt;
+              Modified = true;
+              continue;
+            }
+          }
+        }
       }
     }
 
