@@ -150,6 +150,16 @@ bool W65816InstructionSelector::isConstantZero(Register Reg,
   return CI && CI->isZero();
 }
 
+/// Check if a GlobalValue is in a far section requiring 24-bit addressing.
+/// Far sections: .fardata, .romdata, .bank* (used for data in other banks)
+static bool isGlobalInFarSection(const GlobalValue *GV) {
+  if (!GV->hasSection())
+    return false;
+  StringRef Section = GV->getSection();
+  return Section.starts_with(".fardata") || Section.starts_with(".romdata") ||
+         Section.starts_with(".bank");
+}
+
 /// Check if a G_GLOBAL_VALUE address matches between two instructions.
 /// Returns the GlobalValue and offset if they match, nullptr otherwise.
 static bool isSameGlobalAddress(MachineInstr *Def1, MachineInstr *Def2) {
@@ -472,7 +482,19 @@ bool W65816InstructionSelector::selectLoad(MachineInstr &I) const {
     const GlobalValue *GV = AddrDef->getOperand(1).getGlobal();
     int64_t Offset = AddrDef->getOperand(1).getOffset();
 
-    unsigned Opc = (MemSize == 16) ? W65816::LOAD_GPR16_abs : W65816::LDA8_abs;
+    // Check if this global is in a far section requiring 24-bit addressing
+    bool UseLongAddr = isGlobalInFarSection(GV);
+
+    unsigned Opc;
+    if (UseLongAddr && MemSize == 16) {
+      Opc = W65816::LOAD_GPR16_long;
+    } else if (MemSize == 16) {
+      Opc = W65816::LOAD_GPR16_abs;
+    } else {
+      // 8-bit loads: no long addressing support yet
+      Opc = W65816::LDA8_abs;
+    }
+
     auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opc), DstReg)
                      .addGlobalAddress(GV, Offset);
     if (MMO)
@@ -519,15 +541,19 @@ bool W65816InstructionSelector::selectLoad(MachineInstr &I) const {
     if (!BaseDef || !OffsetDef)
       return false;
 
-    // Global + constant offset → LOAD_GPR16_abs with combined offset.
+    // Global + constant offset → LOAD_GPR16_abs/long with combined offset.
     if (BaseDef->getOpcode() == TargetOpcode::G_GLOBAL_VALUE &&
         OffsetDef->getOpcode() == TargetOpcode::G_CONSTANT && MemSize == 16) {
       const GlobalValue *GV = BaseDef->getOperand(1).getGlobal();
       int64_t BaseOffset = BaseDef->getOperand(1).getOffset();
       int64_t ConstOffset = OffsetDef->getOperand(1).getCImm()->getSExtValue();
 
-      auto NewMI = BuildMI(MBB, I, I.getDebugLoc(),
-                           TII.get(W65816::LOAD_GPR16_abs), DstReg)
+      // Check if this global is in a far section requiring 24-bit addressing
+      bool UseLongAddr = isGlobalInFarSection(GV);
+      unsigned Opc =
+          UseLongAddr ? W65816::LOAD_GPR16_long : W65816::LOAD_GPR16_abs;
+
+      auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opc), DstReg)
                        .addGlobalAddress(GV, BaseOffset + ConstOffset);
       if (MMO)
         NewMI.addMemOperand(MMO);
@@ -695,8 +721,12 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
     const GlobalValue *GV = AddrDef->getOperand(1).getGlobal();
     int64_t Offset = AddrDef->getOperand(1).getOffset();
 
+    // Check if this global is in a far section requiring 24-bit addressing
+    bool UseLongAddr = isGlobalInFarSection(GV);
+
     // STZ optimization: store zero directly without loading into a register.
-    if (MemSize == 16 && isConstantZero(ValReg, MRI)) {
+    // Note: STZ doesn't have a long addressing mode, so skip for far sections.
+    if (MemSize == 16 && isConstantZero(ValReg, MRI) && !UseLongAddr) {
       auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::STZ_abs))
                        .addGlobalAddress(GV, Offset);
       if (MMO)
@@ -706,12 +736,16 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
     }
 
     unsigned Opc;
-    if (MemSize == 16)
+    if (UseLongAddr && MemSize == 16) {
+      Opc = W65816::STORE_GPR16_long;
+    } else if (MemSize == 16) {
       Opc = W65816::STORE_GPR16_abs;
-    else if (MemSize == 8)
+    } else if (MemSize == 8) {
+      // 8-bit stores: no long addressing support yet
       Opc = W65816::STA8_abs;
-    else
+    } else {
       return false;
+    }
 
     auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opc))
                      .addReg(ValReg)
@@ -761,15 +795,18 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
     if (!BaseDef || !OffsetDef)
       return false;
 
-    // Global + constant offset → store to absolute address.
+    // Global + constant offset → store to absolute/long address.
     if (BaseDef->getOpcode() == TargetOpcode::G_GLOBAL_VALUE &&
         OffsetDef->getOpcode() == TargetOpcode::G_CONSTANT) {
       const GlobalValue *GV = BaseDef->getOperand(1).getGlobal();
       int64_t BaseOffset = BaseDef->getOperand(1).getOffset();
       int64_t ConstOffset = OffsetDef->getOperand(1).getCImm()->getSExtValue();
 
-      // STZ optimization: store zero directly.
-      if (MemSize == 16 && isConstantZero(ValReg, MRI)) {
+      // Check if this global is in a far section requiring 24-bit addressing
+      bool UseLongAddr = isGlobalInFarSection(GV);
+
+      // STZ optimization: store zero directly (only for near globals).
+      if (MemSize == 16 && isConstantZero(ValReg, MRI) && !UseLongAddr) {
         auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::STZ_abs))
                          .addGlobalAddress(GV, BaseOffset + ConstOffset);
         if (MMO)
@@ -779,12 +816,16 @@ bool W65816InstructionSelector::selectStore(MachineInstr &I) const {
       }
 
       unsigned Opc;
-      if (MemSize == 16)
+      if (UseLongAddr && MemSize == 16) {
+        Opc = W65816::STORE_GPR16_long;
+      } else if (MemSize == 16) {
         Opc = W65816::STORE_GPR16_abs;
-      else if (MemSize == 8)
+      } else if (MemSize == 8) {
+        // 8-bit stores: no long addressing support yet
         Opc = W65816::STA8_abs;
-      else
+      } else {
         return false;
+      }
 
       auto NewMI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opc))
                        .addReg(ValReg)

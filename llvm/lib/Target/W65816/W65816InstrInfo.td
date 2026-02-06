@@ -399,6 +399,22 @@ let mayStore = 1, hasSideEffects = 0 in {
                                "# STORE_GPR16_abs $src, $addr", []>;
 }
 
+// LOAD_GPR16_long - Load from 24-bit long address to any GPR16 register
+// Used for accessing data in .fardata, .romdata, .bank* sections
+// Expanded to: LDA_long + optional transfer/store to destination register
+let mayLoad = 1, hasSideEffects = 0, Defs = [A, P] in {
+  def LOAD_GPR16_long : Pseudo<(outs GPR16:$dst), (ins addr24:$addr),
+                               "# LOAD_GPR16_long $dst, $addr", []>;
+}
+
+// STORE_GPR16_long - Store from any GPR16 register to 24-bit long address
+// Used for accessing data in .fardata, .romdata, .bank* sections
+// Expanded to: optional transfer/load + STA_long
+let mayStore = 1, hasSideEffects = 0, Defs = [A, P] in {
+  def STORE_GPR16_long : Pseudo<(outs), (ins GPR16:$src, addr24:$addr),
+                                "# STORE_GPR16_long $src, $addr", []>;
+}
+
 // LDA_sr_off - Load from frame index + constant offset
 // Used for array/struct access: arr[i] where arr is on stack
 // Expanded to: LDA (fi + offset),S

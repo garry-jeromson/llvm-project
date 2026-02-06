@@ -203,6 +203,8 @@ private:
   bool expandSPILL_GPR16(Block &MBB, BlockIt MBBI);
   bool expandLOAD_GPR16_abs(Block &MBB, BlockIt MBBI);
   bool expandSTORE_GPR16_abs(Block &MBB, BlockIt MBBI);
+  bool expandLOAD_GPR16_long(Block &MBB, BlockIt MBBI);
+  bool expandSTORE_GPR16_long(Block &MBB, BlockIt MBBI);
   bool expandZEXT8_GPR16(Block &MBB, BlockIt MBBI);
   bool expandSEXT8_GPR16(Block &MBB, BlockIt MBBI);
   bool expandLOAD8_ZEXT_GPR16_abs(Block &MBB, BlockIt MBBI);
@@ -373,6 +375,10 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandLOAD_GPR16_abs(MBB, MBBI);
   case W65816::STORE_GPR16_abs:
     return expandSTORE_GPR16_abs(MBB, MBBI);
+  case W65816::LOAD_GPR16_long:
+    return expandLOAD_GPR16_long(MBB, MBBI);
+  case W65816::STORE_GPR16_long:
+    return expandSTORE_GPR16_long(MBB, MBBI);
   case W65816::ZEXT8_GPR16:
     return expandZEXT8_GPR16(MBB, MBBI);
   case W65816::SEXT8_GPR16:
@@ -3800,6 +3806,74 @@ bool W65816ExpandPseudo::expandSTORE_GPR16_abs(Block &MBB, BlockIt MBBI) {
           .addImm(STORE_ABS_SCRATCH_DP);
     }
   }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandLOAD_GPR16_long(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // LOAD_GPR16_long $dst, $addr
+  // Load from 24-bit long address to any GPR16 register.
+  // Always uses LDA_long (goes through A), then transfer/store as needed.
+  // The pseudo has Defs=[A,P], so A is always clobbered.
+
+  Register DstReg = MI.getOperand(0).getReg();
+  MachineOperand &AddrOp = MI.getOperand(1);
+
+  // Load into A using LDA_long
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_long), W65816::A).add(AddrOp);
+
+  // Transfer to destination if needed
+  if (DstReg == W65816::A) {
+    // Already in A, nothing to do
+  } else if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    // Store A to the imaginary register's DP address
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSTORE_GPR16_long(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // STORE_GPR16_long $src, $addr
+  // Store from any GPR16 register to 24-bit long address.
+  // Always uses STA_long (goes through A), so transfer/load as needed first.
+  // The pseudo has Defs=[A,P], so A is always clobbered.
+
+  Register SrcReg = MI.getOperand(0).getReg();
+  MachineOperand &AddrOp = MI.getOperand(1);
+
+  // Get value into A if not already there
+  if (SrcReg == W65816::A) {
+    // Already in A, nothing to do
+  } else if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
+  } else if (SrcReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Load from the imaginary register's DP address into A
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
+  }
+
+  // Store from A using STA_long
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_long))
+      .addReg(W65816::A)
+      .add(AddrOp);
 
   MI.eraseFromParent();
   return true;

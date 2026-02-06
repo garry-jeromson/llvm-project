@@ -225,11 +225,11 @@ define i16 @test_last_element() {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: test_far_add:
-; GISel loads far_data into X, adds with A, stores result back via X
-; CHECK: ldx far_data
+; GISel loads far_data into A, saves addend, adds, stores result back
+; CHECK: lda far_data
 ; CHECK: clc
 ; CHECK: adc
-; CHECK: stx far_data
+; CHECK: sta far_data
 ; CHECK: rts
 define void @test_far_add(i16 %addend) {
   %val = load i16, ptr @far_data
@@ -244,7 +244,9 @@ define void @test_far_add(i16 %addend) {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: test_far_stz:
-; CHECK: stz far_data
+; Note: STZ doesn't have a long addressing mode, so far sections use LDA #0; STA
+; CHECK: lda #0
+; CHECK: sta far_data
 ; CHECK: rts
 define void @test_far_stz() {
   store i16 0, ptr @far_data
