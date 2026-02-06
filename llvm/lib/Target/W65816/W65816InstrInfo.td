@@ -1337,7 +1337,7 @@ let Defs = [P] in {
   // Expanded to DEC_A, DEX, or DEY based on allocated register
   def DEC16 : Pseudo<(outs GPR16:$dst), (ins GPR16:$src),
                      "# DEC16 $dst, $src",
-                     [(set GPR16:$dst, (add GPR16:$src, -1))]> {
+                     [(set GPR16:$dst, (sub GPR16:$src, 1))]> {
     let Constraints = "$src = $dst";
   }
 }

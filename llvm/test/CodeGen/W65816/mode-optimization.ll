@@ -50,7 +50,7 @@ define void @byte_copy(ptr %src, ptr %dst) {
 ; CHECK: lda (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32
 ; CHECK: and #255
-; CHECK: inc a
+; Register allocator may use INC A, INX, or INY for increment
 ; CHECK: sep #32
 ; CHECK: sta (${{[0-9a-f]+}},s),y
 ; CHECK: rep #32

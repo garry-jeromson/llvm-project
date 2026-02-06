@@ -1,11 +1,10 @@
 ; RUN: llc -march=w65816 < %s | FileCheck %s
 
-; Test that CLC; ADC #1 is optimized to INC A
-; and SEC; SBC #1 is optimized to DEC A
+; Test that add/sub by 1 uses INC/DEC instructions
 
 target triple = "w65816-unknown-none"
 
-; Test 1: Add 1 should use INC A instead of CLC; ADC #1
+; Test 1: Add 1 should use INC A (INC16 pseudo)
 define i16 @add_one(i16 %x) {
 ; CHECK-LABEL: add_one:
 ; CHECK:       inc a
@@ -17,11 +16,12 @@ entry:
   ret i16 %result
 }
 
-; Test 2: GISel uses CLC; ADC #65535 for subtract by 1
+; Test 2: Subtract 1 should use DEC A (DEC16 pseudo)
 define i16 @sub_one(i16 %x) {
 ; CHECK-LABEL: sub_one:
-; CHECK:       clc
-; CHECK-NEXT:  adc #65535
+; CHECK:       dec a
+; CHECK-NOT:   clc
+; CHECK-NOT:   adc #65535
 ; CHECK-NEXT:  rts
 entry:
   %result = sub i16 %x, 1

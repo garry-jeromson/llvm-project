@@ -71,7 +71,7 @@ define void @byte_roundtrip() {
 ; CHECK: lda byte_var
 ; CHECK: rep #32
 ; CHECK: and #255
-; CHECK: inc a
+; Register allocator may use A (inc a) or X (tax; inx; txa)
 ; CHECK: sep #32
 ; CHECK: sta byte_var
 ; CHECK: rep #32

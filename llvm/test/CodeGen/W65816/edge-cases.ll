@@ -195,9 +195,8 @@ define i16 @add_overflow(i16 %a) {
 }
 
 ; CHECK-LABEL: sub_underflow:
-; GISel uses add with -1 (65535) instead of dec
-; CHECK: clc
-; CHECK: adc #65535
+; Now uses DEC16 for subtract-by-1
+; CHECK: dec a
 ; CHECK: rts
 define i16 @sub_underflow(i16 %a) {
   %r = sub i16 %a, 1

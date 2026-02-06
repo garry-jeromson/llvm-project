@@ -368,6 +368,40 @@ bool W65816InstructionSelector::selectBinOp(MachineInstr &I) const {
   if (RHSDef && RHSDef->getOpcode() == TargetOpcode::G_CONSTANT) {
     int64_t Val = RHSDef->getOperand(1).getCImm()->getSExtValue();
 
+    // Special case: add/sub by 1 uses INC16/DEC16 (single-byte instruction)
+    // The combiner may transform G_SUB x, 1 to G_ADD x, -1, so check both forms
+    if (I.getOpcode() == TargetOpcode::G_ADD && Val == 1) {
+      auto NewMI =
+          BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::INC16), DstReg)
+              .addReg(LHS);
+      if (!constrainSelectedInstRegOperands(*NewMI, TII, TRI, RBI))
+        return false;
+      RBI.constrainGenericRegister(LHS, W65816::GPR16RegClass, MRI);
+      I.eraseFromParent();
+      return true;
+    }
+    // G_ADD x, -1 (65535 unsigned) should use DEC16
+    if (I.getOpcode() == TargetOpcode::G_ADD && (Val == -1 || Val == 65535)) {
+      auto NewMI =
+          BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::DEC16), DstReg)
+              .addReg(LHS);
+      if (!constrainSelectedInstRegOperands(*NewMI, TII, TRI, RBI))
+        return false;
+      RBI.constrainGenericRegister(LHS, W65816::GPR16RegClass, MRI);
+      I.eraseFromParent();
+      return true;
+    }
+    if (I.getOpcode() == TargetOpcode::G_SUB && Val == 1) {
+      auto NewMI =
+          BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::DEC16), DstReg)
+              .addReg(LHS);
+      if (!constrainSelectedInstRegOperands(*NewMI, TII, TRI, RBI))
+        return false;
+      RBI.constrainGenericRegister(LHS, W65816::GPR16RegClass, MRI);
+      I.eraseFromParent();
+      return true;
+    }
+
     unsigned ImmOpc;
     switch (I.getOpcode()) {
     case TargetOpcode::G_ADD:

@@ -124,8 +124,7 @@ else:
 
 ; CHECK-LABEL: count_loop:
 ; CHECK: .L{{.*}}:
-; CHECK: clc
-; CHECK: adc #65535
+; CHECK: dec a
 ; CHECK: cmp #1
 ; CHECK: bne .L
 ; CHECK: rts
