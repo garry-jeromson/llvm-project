@@ -1697,11 +1697,28 @@ bool W65816ExpandPseudo::expandSHL16ri(Block &MBB, BlockIt MBBI) {
   // Optimization: shift left by 8 can use XBA + AND
   // XBA swaps high and low bytes, then AND #$FF00 clears the low byte.
   // This is 4 bytes (XBA=1, AND imm16=3) vs 8 bytes (8x ASL=8).
-  if (ShiftAmt == 8) {
+  if (ShiftAmt >= 16) {
+    // Shifting left by 16+ bits always produces 0
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A).addImm(0);
+  } else if (ShiftAmt == 8) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A).addReg(W65816::A);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
         .addReg(W65816::A)
         .addImm(0xFF00);
+  } else if (ShiftAmt > 8) {
+    // Optimization: for shifts 9-15, use XBA (SHL by 8) then continue.
+    // XBA+AND is 4 bytes, vs 1 byte per ASL.
+    // SHL by 9: XBA+AND(4) + 1×ASL(1) = 5 bytes vs 9×1 = 9 bytes
+    // SHL by 15: XBA+AND(4) + 7×ASL(7) = 11 bytes vs 15×1 = 15 bytes
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A).addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0xFF00);
+    // Do remaining (ShiftAmt - 8) shifts
+    for (unsigned i = 0; i < ShiftAmt - 8; ++i) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::ASL_A), W65816::A)
+          .addReg(W65816::A);
+    }
   } else {
     // Emit ShiftAmt ASL A instructions
     for (unsigned i = 0; i < ShiftAmt; ++i) {
@@ -1772,11 +1789,9 @@ bool W65816ExpandPseudo::expandSRL16ri(Block &MBB, BlockIt MBBI) {
   // Optimization: lshr by 8 can use XBA + AND
   // XBA swaps high and low bytes, then AND #$00FF clears the high byte.
   // This is 4 bytes (XBA=1, AND imm16=3) vs 8 bytes (8x LSR=8).
-  if (ShiftAmt == 8) {
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A).addReg(W65816::A);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
-        .addReg(W65816::A)
-        .addImm(0x00FF);
+  if (ShiftAmt >= 16) {
+    // Shifting right by 16+ bits always produces 0
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A).addImm(0);
   } else if (ShiftAmt == 15) {
     // Optimization: lshr by 15 extracts the sign bit (bit 15).
     // Instead of 15 LSR instructions, use:
@@ -1789,6 +1804,25 @@ bool W65816ExpandPseudo::expandSRL16ri(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A).addImm(0);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::ROL_A), W65816::A)
         .addReg(W65816::A);
+  } else if (ShiftAmt == 8) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A).addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0x00FF);
+  } else if (ShiftAmt > 8) {
+    // Optimization: for shifts 9-14, use XBA (LSHR by 8) then continue.
+    // XBA+AND is 4 bytes, vs 1 byte per LSR.
+    // LSHR by 9: XBA+AND(4) + 1×LSR(1) = 5 bytes vs 9×1 = 9 bytes
+    // LSHR by 14: XBA+AND(4) + 6×LSR(6) = 10 bytes vs 14×1 = 14 bytes
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A).addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0x00FF);
+    // Do remaining (ShiftAmt - 8) shifts
+    for (unsigned i = 0; i < ShiftAmt - 8; ++i) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LSR_A), W65816::A)
+          .addReg(W65816::A);
+    }
   } else {
     // Emit ShiftAmt LSR A instructions
     for (unsigned i = 0; i < ShiftAmt; ++i) {
@@ -1877,6 +1911,61 @@ bool W65816ExpandPseudo::expandSRA16ri(Block &MBB, BlockIt MBBI) {
     // Note: SBC_imm16 only takes the immediate, A is implicit
     BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_imm16), W65816::A)
         .addImm(0x0080);
+  } else if (ShiftAmt == 15) {
+    // Optimization: ashr by 15 produces sign-extension (all 0s or all 1s).
+    // Instead of 15 iterations of CMP+ROR (60 bytes), use:
+    //   ASL A       ; shift bit 15 into carry
+    //   LDA #0      ; A = 0
+    //   ROL A       ; A = carry (sign bit: 0 or 1)
+    //   EOR #1      ; A = !sign (1 if positive, 0 if negative)
+    //   DEC A       ; A = !sign - 1 = 0 if positive, $FFFF if negative
+    // This is 9 bytes vs 60 bytes.
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ASL_A), W65816::A)
+        .addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A).addImm(0);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ROL_A), W65816::A)
+        .addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(1);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::DEC_A), W65816::A)
+        .addReg(W65816::A);
+  } else if (ShiftAmt >= 16) {
+    // Shifting by 16 or more bits always produces 0 or -1 (sign extension).
+    // Equivalent to ASHR by 15.
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ASL_A), W65816::A)
+        .addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A).addImm(0);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::ROL_A), W65816::A)
+        .addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(1);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::DEC_A), W65816::A)
+        .addReg(W65816::A);
+  } else if (ShiftAmt > 8) {
+    // Optimization: for shifts 9-14, use XBA (ASHR by 8) then continue.
+    // XBA sequence is 11 bytes, vs 4 bytes per iteration.
+    // ASHR by 9: XBA(11) + 1×CMP+ROR(4) = 15 bytes vs 9×4 = 36 bytes
+    // ASHR by 14: XBA(11) + 6×CMP+ROR(24) = 35 bytes vs 14×4 = 56 bytes
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::XBA), W65816::A).addReg(W65816::A);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0x00FF);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_imm16), W65816::A)
+        .addReg(W65816::A)
+        .addImm(0x0080);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::SEC));
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_imm16), W65816::A)
+        .addImm(0x0080);
+    // Now do remaining (ShiftAmt - 8) shifts
+    for (unsigned i = 0; i < ShiftAmt - 8; ++i) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
+          .addReg(W65816::A)
+          .addImm(0x8000);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::ROR_A), W65816::A)
+          .addReg(W65816::A);
+    }
   } else {
     // For arithmetic shift right, we need to:
     // 1. Check if negative (bit 15 set)
@@ -2491,15 +2580,42 @@ bool W65816ExpandPseudo::expandSHL16rv(Block &MBB, BlockIt MBBI) {
 
   // Create loop and done blocks (pass parent's BasicBlock for proper symbol
   // handling)
+  // Create blocks for the shift loop with XBA optimization for amounts >= 8
+  // Structure:
+  //   MBB: check if X==0 -> done, check if X<8 -> loop
+  //   Xba8BB: XBA optimization, subtract 8, check if X==0 -> done
+  //   LoopBB: shift loop
+  //   DoneBB: result handling
+  MachineBasicBlock *Xba8BB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
   MachineBasicBlock *LoopBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
   MachineBasicBlock *DoneBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
 
-  MF->insert(std::next(MBB.getIterator()), LoopBB);
+  MF->insert(std::next(MBB.getIterator()), Xba8BB);
+  MF->insert(std::next(Xba8BB->getIterator()), LoopBB);
   MF->insert(std::next(LoopBB->getIterator()), DoneBB);
 
-  // In MBB: check if X is 0, branch to done
+  // In MBB: check if X is 0, branch to done; check if X < 8, branch to loop
   BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(0);
   BuildMI(MBB, MBBI, DL, TII->get(W65816::BEQ)).addMBB(DoneBB);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(8);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::BCC)).addMBB(LoopBB);
+
+  // Xba8BB: XBA + AND to shift by 8, then subtract 8 from counter
+  // SHL by 8: XBA swaps bytes, AND #$FF00 keeps low byte in high position
+  BuildMI(Xba8BB, DL, TII->get(W65816::XBA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0xFF00);
+  // Save A (shifted result), subtract 8 from X, restore A
+  BuildMI(Xba8BB, DL, TII->get(W65816::PHA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::TXA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::SEC));
+  BuildMI(Xba8BB, DL, TII->get(W65816::SBC_imm16), W65816::A).addImm(8);
+  BuildMI(Xba8BB, DL, TII->get(W65816::TAX));
+  BuildMI(Xba8BB, DL, TII->get(W65816::PLA));
+  // Check if remaining count is 0 (flags set by TAX, but we need CPX)
+  BuildMI(Xba8BB, DL, TII->get(W65816::CPX_imm16)).addImm(0);
+  BuildMI(Xba8BB, DL, TII->get(W65816::BEQ)).addMBB(DoneBB);
 
   // Loop block: asl a, dex, bne loop
   BuildMI(LoopBB, DL, TII->get(W65816::ASL_A), W65816::A).addReg(W65816::A);
@@ -2511,8 +2627,11 @@ bool W65816ExpandPseudo::expandSHL16rv(Block &MBB, BlockIt MBBI) {
   DoneBB->transferSuccessors(&MBB);
 
   // Update successors AFTER transferSuccessors (which clears MBB's successors)
-  MBB.addSuccessor(LoopBB);
-  MBB.addSuccessor(DoneBB);
+  MBB.addSuccessor(Xba8BB);     // X >= 8
+  MBB.addSuccessor(LoopBB);     // X < 8 and X != 0
+  MBB.addSuccessor(DoneBB);     // X == 0
+  Xba8BB->addSuccessor(LoopBB); // Continue to loop
+  Xba8BB->addSuccessor(DoneBB); // X was exactly 8
   LoopBB->addSuccessor(LoopBB); // Loop back
   LoopBB->addSuccessor(DoneBB); // Exit
 
@@ -2599,14 +2718,37 @@ bool W65816ExpandPseudo::expandSRL16rv(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::PLA);
   }
 
+  // Create blocks for the shift loop with XBA optimization for amounts >= 8
+  MachineBasicBlock *Xba8BB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
   MachineBasicBlock *LoopBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
   MachineBasicBlock *DoneBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
 
-  MF->insert(std::next(MBB.getIterator()), LoopBB);
+  MF->insert(std::next(MBB.getIterator()), Xba8BB);
+  MF->insert(std::next(Xba8BB->getIterator()), LoopBB);
   MF->insert(std::next(LoopBB->getIterator()), DoneBB);
 
+  // In MBB: check if X is 0, branch to done; check if X < 8, branch to loop
   BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(0);
   BuildMI(MBB, MBBI, DL, TII->get(W65816::BEQ)).addMBB(DoneBB);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(8);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::BCC)).addMBB(LoopBB);
+
+  // Xba8BB: XBA + AND to shift by 8, then subtract 8 from counter
+  // LSHR by 8: XBA swaps bytes, AND #$00FF keeps high byte in low position
+  BuildMI(Xba8BB, DL, TII->get(W65816::XBA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+  // Save A (shifted result), subtract 8 from X, restore A
+  BuildMI(Xba8BB, DL, TII->get(W65816::PHA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::TXA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::SEC));
+  BuildMI(Xba8BB, DL, TII->get(W65816::SBC_imm16), W65816::A).addImm(8);
+  BuildMI(Xba8BB, DL, TII->get(W65816::TAX));
+  BuildMI(Xba8BB, DL, TII->get(W65816::PLA));
+  // Check if remaining count is 0
+  BuildMI(Xba8BB, DL, TII->get(W65816::CPX_imm16)).addImm(0);
+  BuildMI(Xba8BB, DL, TII->get(W65816::BEQ)).addMBB(DoneBB);
 
   // Loop: lsr a, dex, bne loop
   BuildMI(LoopBB, DL, TII->get(W65816::LSR_A), W65816::A).addReg(W65816::A);
@@ -2616,9 +2758,12 @@ bool W65816ExpandPseudo::expandSRL16rv(Block &MBB, BlockIt MBBI) {
   DoneBB->splice(DoneBB->end(), &MBB, std::next(MBBI), MBB.end());
   DoneBB->transferSuccessors(&MBB);
 
-  // Update successors AFTER transferSuccessors (which clears MBB's successors)
-  MBB.addSuccessor(LoopBB);
-  MBB.addSuccessor(DoneBB);
+  // Update successors
+  MBB.addSuccessor(Xba8BB);     // X >= 8
+  MBB.addSuccessor(LoopBB);     // X < 8 and X != 0
+  MBB.addSuccessor(DoneBB);     // X == 0
+  Xba8BB->addSuccessor(LoopBB); // Continue to loop
+  Xba8BB->addSuccessor(DoneBB); // X was exactly 8
   LoopBB->addSuccessor(LoopBB);
   LoopBB->addSuccessor(DoneBB);
 
@@ -2702,14 +2847,42 @@ bool W65816ExpandPseudo::expandSRA16rv(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::PLA);
   }
 
+  // Create blocks for the shift loop with XBA optimization for amounts >= 8
+  MachineBasicBlock *Xba8BB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
   MachineBasicBlock *LoopBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
   MachineBasicBlock *DoneBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
 
-  MF->insert(std::next(MBB.getIterator()), LoopBB);
+  MF->insert(std::next(MBB.getIterator()), Xba8BB);
+  MF->insert(std::next(Xba8BB->getIterator()), LoopBB);
   MF->insert(std::next(LoopBB->getIterator()), DoneBB);
 
+  // In MBB: check if X is 0, branch to done; check if X < 8, branch to loop
   BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(0);
   BuildMI(MBB, MBBI, DL, TII->get(W65816::BEQ)).addMBB(DoneBB);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(8);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::BCC)).addMBB(LoopBB);
+
+  // Xba8BB: XBA + sign-extend to shift by 8, then subtract 8 from counter
+  // ASHR by 8: XBA swaps, AND #$00FF, then sign-extend: EOR #$80, SEC, SBC #$80
+  BuildMI(Xba8BB, DL, TII->get(W65816::XBA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::AND_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x00FF);
+  BuildMI(Xba8BB, DL, TII->get(W65816::EOR_imm16), W65816::A)
+      .addReg(W65816::A)
+      .addImm(0x0080);
+  BuildMI(Xba8BB, DL, TII->get(W65816::SEC));
+  BuildMI(Xba8BB, DL, TII->get(W65816::SBC_imm16), W65816::A).addImm(0x0080);
+  // Save A (shifted result), subtract 8 from X, restore A
+  BuildMI(Xba8BB, DL, TII->get(W65816::PHA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::TXA));
+  BuildMI(Xba8BB, DL, TII->get(W65816::SEC));
+  BuildMI(Xba8BB, DL, TII->get(W65816::SBC_imm16), W65816::A).addImm(8);
+  BuildMI(Xba8BB, DL, TII->get(W65816::TAX));
+  BuildMI(Xba8BB, DL, TII->get(W65816::PLA));
+  // Check if remaining count is 0
+  BuildMI(Xba8BB, DL, TII->get(W65816::CPX_imm16)).addImm(0);
+  BuildMI(Xba8BB, DL, TII->get(W65816::BEQ)).addMBB(DoneBB);
 
   // Loop: cmp #$8000 (sets carry from sign), ror a, dex, bne loop
   BuildMI(LoopBB, DL, TII->get(W65816::CMP_imm16))
@@ -2722,9 +2895,12 @@ bool W65816ExpandPseudo::expandSRA16rv(Block &MBB, BlockIt MBBI) {
   DoneBB->splice(DoneBB->end(), &MBB, std::next(MBBI), MBB.end());
   DoneBB->transferSuccessors(&MBB);
 
-  // Update successors AFTER transferSuccessors (which clears MBB's successors)
-  MBB.addSuccessor(LoopBB);
-  MBB.addSuccessor(DoneBB);
+  // Update successors
+  MBB.addSuccessor(Xba8BB);     // X >= 8
+  MBB.addSuccessor(LoopBB);     // X < 8 and X != 0
+  MBB.addSuccessor(DoneBB);     // X == 0
+  Xba8BB->addSuccessor(LoopBB); // Continue to loop
+  Xba8BB->addSuccessor(DoneBB); // X was exactly 8
   LoopBB->addSuccessor(LoopBB);
   LoopBB->addSuccessor(DoneBB);
 
@@ -3601,26 +3777,43 @@ bool W65816ExpandPseudo::expandRELOAD_GPR16(Block &MBB, BlockIt MBBI) {
   // Scratch DP location for saving A (different from $FE used by ADD/SUB)
   static const unsigned RELOAD_SCRATCH_DP = 0xFC;
 
+  // Check if P (flags) is live after this instruction - if so, we need to
+  // preserve flags since LDA clobbers N/Z
+  LivePhysRegs LiveRegs(*TRI);
+  LiveRegs.addLiveOuts(MBB);
+  for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+    LiveRegs.stepBackward(*I);
+  }
+  bool PLive = !LiveRegs.available(*MRI, W65816::P);
+
   if (DstReg == W65816::A) {
-    // Direct load to A - no protection needed
+    // Loading into A - check if flags need preservation
+    if (PLive) {
+      buildMI(MBB, MBBI, W65816::PHP);
+    }
     auto LoadInst = BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_sr), W65816::A);
     if (FIOp.isFI()) {
       LoadInst.addFrameIndex(FIOp.getIndex());
     } else {
-      LoadInst.add(FIOp);
+      // If PHP was used, we need to adjust the stack offset by +1
+      // because PHP pushed 1 byte onto the stack
+      if (PLive && FIOp.isImm()) {
+        LoadInst.addImm(FIOp.getImm() + 1);
+      } else {
+        LoadInst.add(FIOp);
+      }
+    }
+    if (PLive) {
+      buildMI(MBB, MBBI, W65816::PLP);
     }
   } else {
-    // Loading into X or Y - check if A is live and needs protection
-    // Compute live registers at this point by walking backward from the end
-    // of the block and stepping to just before this instruction.
-    LivePhysRegs LiveRegs(*TRI);
-    LiveRegs.addLiveOuts(MBB);
-    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
-      LiveRegs.stepBackward(*I);
-    }
-
-    // A is live if it's in the live set (will be used after this instruction)
+    // Loading into X, Y, or imaginary register - check if A is live
     bool ALive = !LiveRegs.available(*MRI, W65816::A);
+
+    // If flags need preservation, use PHP/PLP
+    if (PLive) {
+      buildMI(MBB, MBBI, W65816::PHP);
+    }
 
     if (ALive) {
       // Save A to scratch DP location (doesn't affect SP)
@@ -3633,7 +3826,13 @@ bool W65816ExpandPseudo::expandRELOAD_GPR16(Block &MBB, BlockIt MBBI) {
     if (FIOp.isFI()) {
       LoadInst.addFrameIndex(FIOp.getIndex());
     } else {
-      LoadInst.add(FIOp);
+      // If PHP was used, we need to adjust the stack offset by +1
+      // because PHP pushed 1 byte onto the stack
+      if (PLive && FIOp.isImm()) {
+        LoadInst.addImm(FIOp.getImm() + 1);
+      } else {
+        LoadInst.add(FIOp);
+      }
     }
 
     if (DstReg == W65816::X) {
@@ -3652,6 +3851,10 @@ bool W65816ExpandPseudo::expandRELOAD_GPR16(Block &MBB, BlockIt MBBI) {
       // Restore A from scratch DP location
       BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
           .addImm(RELOAD_SCRATCH_DP);
+    }
+
+    if (PLive) {
+      buildMI(MBB, MBBI, W65816::PLP);
     }
   }
 

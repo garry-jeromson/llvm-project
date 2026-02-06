@@ -57,8 +57,9 @@ define void @store_imm_const_addr() {
 ; CHECK-LABEL: mul_negative:
 ; Should not crash, should call __mulhi3
 ; -10000 as unsigned 16-bit = 55536
-; GISel loads constant into A instead of X
-; CHECK: lda #55536
+; First arg (%x) is already in A from calling convention
+; Constant is loaded into X (second arg position)
+; CHECK: ldx #55536
 ; CHECK: jsr __mulhi3
 ; CHECK: rts
 define i16 @mul_negative(i16 %x) {
@@ -68,8 +69,9 @@ define i16 @mul_negative(i16 %x) {
 
 ; CHECK-LABEL: mul_negative_small:
 ; -10 as unsigned 16-bit = 65526
-; GISel loads constant into A instead of X
-; CHECK: lda #65526
+; First arg (%x) is already in A from calling convention
+; Constant is loaded into X (second arg position)
+; CHECK: ldx #65526
 ; CHECK: jsr __mulhi3
 ; CHECK: rts
 define i16 @mul_negative_small(i16 %x) {

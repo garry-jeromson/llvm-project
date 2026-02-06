@@ -99,6 +99,25 @@ W65816LegalizerInfo::W65816LegalizerInfo(const W65816Subtarget &ST) {
       .legalFor({{s16, s1}})
       .clampScalar(0, s16, s16);
 
+  // Min/Max operations - lower to compare+select sequences.
+  // G_SMAX(a, b) → (a > b) ? a : b (signed)
+  // G_SMIN(a, b) → (a < b) ? a : b (signed)
+  // G_UMAX(a, b) → (a > b) ? a : b (unsigned)
+  // G_UMIN(a, b) → (a < b) ? a : b (unsigned)
+  getActionDefinitionsBuilder({G_SMAX, G_SMIN, G_UMAX, G_UMIN})
+      .widenScalarToNextPow2(0, 16)
+      .clampScalar(0, s16, s16)
+      .lower();
+
+  // Absolute value - custom lowering to compare+select+negate.
+  // The default .lower() uses branchless algorithm (x >> 15) + x ^ (x >> 15)
+  // which requires ASHR by 15, but our ASHR expansion is O(n) in shift amount.
+  // Custom lowering: G_ABS(x) → (x < 0) ? -x : x
+  getActionDefinitionsBuilder(G_ABS)
+      .customFor({s16})
+      .widenScalarToNextPow2(0, 16)
+      .clampScalar(0, s16, s16);
+
   // Branches - condition is s1.
   getActionDefinitionsBuilder(G_BRCOND).legalFor({s1});
   getActionDefinitionsBuilder(G_BR).legalIf(
@@ -159,6 +178,8 @@ bool W65816LegalizerInfo::legalizeCustom(
   case TargetOpcode::G_UMULH:
   case TargetOpcode::G_SMULH:
     return legalizeMulHigh(MI, MIRBuilder);
+  case TargetOpcode::G_ABS:
+    return legalizeAbs(MI, MIRBuilder);
   default:
     return false;
   }
@@ -269,6 +290,32 @@ bool W65816LegalizerInfo::legalizeMulHigh(MachineInstr &MI,
   auto Result = MIRBuilder.buildAdd(S16, H2, MidHi);
 
   MIRBuilder.buildCopy(DstReg, Result.getReg(0));
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816LegalizerInfo::legalizeAbs(MachineInstr &MI,
+                                      MachineIRBuilder &MIRBuilder) const {
+  // Lower G_ABS(x) to (x < 0) ? -x : x
+  // This is more efficient than the branchless algorithm (x >> 15) + x ^ (x >>
+  // 15) because our ASHR expansion is O(n) in shift amount.
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+
+  LLT S16 = LLT::scalar(16);
+  LLT S1 = LLT::scalar(1);
+
+  // Build: cmp = x < 0 (signed)
+  auto Zero = MIRBuilder.buildConstant(S16, 0);
+  auto Cmp = MIRBuilder.buildICmp(CmpInst::ICMP_SLT, S1, SrcReg, Zero);
+
+  // Build: neg = 0 - x
+  auto Neg = MIRBuilder.buildSub(S16, Zero, SrcReg);
+
+  // Build: result = cmp ? neg : x
+  MIRBuilder.buildSelect(DstReg, Cmp, Neg, SrcReg);
 
   MI.eraseFromParent();
   return true;

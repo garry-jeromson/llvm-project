@@ -330,9 +330,14 @@ bool W65816InstructionSelector::selectLibcallBinOp(
       .addReg(RHS);
 
   // Emit: JSR __libcall with call-preserved mask.
+  // IMPORTANT: Add implicit uses of A and X so register allocator knows
+  // these registers are live inputs to the call. Without these, the COPY
+  // instructions that set up A and X get removed as dead stores.
   BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::JSR))
       .addExternalSymbol(LibcallName)
-      .addRegMask(TRI.getCallPreservedMask(MF, CallingConv::C));
+      .addRegMask(TRI.getCallPreservedMask(MF, CallingConv::C))
+      .addReg(W65816::A, RegState::Implicit)
+      .addReg(W65816::X, RegState::Implicit);
 
   // Copy result: A → DstReg.
   BuildMI(MBB, I, I.getDebugLoc(), TII.get(TargetOpcode::COPY), DstReg)

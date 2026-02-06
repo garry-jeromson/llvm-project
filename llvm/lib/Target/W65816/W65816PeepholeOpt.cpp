@@ -79,6 +79,7 @@
 #include "W65816.h"
 #include "W65816InstrInfo.h"
 
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
@@ -102,8 +103,12 @@ public:
   StringRef getPassName() const override { return W65816_PEEPHOLE_OPT_NAME; }
 
 private:
+  const TargetRegisterInfo *TRI = nullptr;
+  const MachineRegisterInfo *MRI = nullptr;
+
   bool optimizeMBB(MachineBasicBlock &MBB);
-  bool isRedundantTransferPair(unsigned First, unsigned Second);
+  bool isRedundantTransferPair(unsigned First, unsigned Second,
+                               Register &IntermediateReg);
   bool removeRedundantBranches(MachineFunction &MF);
 };
 
@@ -111,12 +116,27 @@ char W65816PeepholeOpt::ID = 0;
 
 /// Check if two transfer opcodes form a redundant pair.
 /// Returns true for: TAX/TXA, TXA/TAX, TAY/TYA, TYA/TAY
-bool W65816PeepholeOpt::isRedundantTransferPair(unsigned First,
-                                                unsigned Second) {
-  return (First == W65816::TAX && Second == W65816::TXA) ||
-         (First == W65816::TXA && Second == W65816::TAX) ||
-         (First == W65816::TAY && Second == W65816::TYA) ||
-         (First == W65816::TYA && Second == W65816::TAY);
+/// Also returns the intermediate register (X or Y) that would be clobbered.
+bool W65816PeepholeOpt::isRedundantTransferPair(unsigned First, unsigned Second,
+                                                Register &IntermediateReg) {
+  if (First == W65816::TAX && Second == W65816::TXA) {
+    IntermediateReg = W65816::X;
+    return true;
+  }
+  if (First == W65816::TXA && Second == W65816::TAX) {
+    IntermediateReg = W65816::X;
+    return true;
+  }
+  if (First == W65816::TAY && Second == W65816::TYA) {
+    IntermediateReg = W65816::Y;
+    return true;
+  }
+  if (First == W65816::TYA && Second == W65816::TAY) {
+    IntermediateReg = W65816::Y;
+    return true;
+  }
+  IntermediateReg = Register();
+  return false;
 }
 
 /// Check if two opcodes form a redundant push/pop pair.
@@ -291,15 +311,56 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
     unsigned NextOpcode = NextMI.getOpcode();
 
     // Check for redundant transfer pairs (TAX/TXA, TAY/TYA, etc.)
-    if (isRedundantTransferPair(Opcode, NextOpcode)) {
-      LLVM_DEBUG(dbgs() << "Removing redundant transfer pair:\n  " << MI << "  "
-                        << NextMI);
-      auto AfterNext = std::next(NextMBBI);
-      MBB.erase(MBBI);
-      MBB.erase(NextMBBI);
-      MBBI = AfterNext;
-      Modified = true;
-      continue;
+    // Only remove if the intermediate register is not live after the pair.
+    Register IntermediateReg;
+    if (isRedundantTransferPair(Opcode, NextOpcode, IntermediateReg)) {
+      // Check if the intermediate register (X or Y) is live after the pair.
+      // If it is, we can't remove the pair because the first instruction's
+      // result (the intermediate register value) is used later.
+
+      // First check: is the intermediate register used later in THIS block?
+      bool UsedLaterInBlock = false;
+      for (auto I = std::next(NextMBBI); I != MBB.end(); ++I) {
+        for (const MachineOperand &MO : I->operands()) {
+          if (MO.isReg() && MO.isUse() && MO.getReg() == IntermediateReg) {
+            UsedLaterInBlock = true;
+            break;
+          }
+        }
+        if (UsedLaterInBlock)
+          break;
+      }
+
+      // Second check: is the register used in any successor block?
+      // (The intermediate register might be live-out and used later)
+      bool UsedInSuccessor = false;
+      for (MachineBasicBlock *Succ : MBB.successors()) {
+        for (MachineInstr &SuccMI : *Succ) {
+          for (const MachineOperand &MO : SuccMI.operands()) {
+            if (MO.isReg() && MO.isUse() && MO.getReg() == IntermediateReg) {
+              UsedInSuccessor = true;
+              break;
+            }
+          }
+          if (UsedInSuccessor)
+            break;
+        }
+        if (UsedInSuccessor)
+          break;
+      }
+
+      bool IntermediateRegLive = UsedLaterInBlock || UsedInSuccessor;
+      if (!IntermediateRegLive) {
+        LLVM_DEBUG(dbgs() << "Removing redundant transfer pair:\n  " << MI
+                          << "  " << NextMI);
+        auto AfterNext = std::next(NextMBBI);
+        MBB.erase(MBBI);
+        MBB.erase(NextMBBI);
+        MBBI = AfterNext;
+        Modified = true;
+        continue;
+      }
+      // If intermediate reg is live, don't remove - fall through to next check
     }
 
     // Check for redundant push/pop pairs (PHA/PLA, PHX/PLX, PHY/PLY)
@@ -872,6 +933,9 @@ bool W65816PeepholeOpt::removeRedundantBranches(MachineFunction &MF) {
 }
 
 bool W65816PeepholeOpt::runOnMachineFunction(MachineFunction &MF) {
+  TRI = MF.getSubtarget().getRegisterInfo();
+  MRI = &MF.getRegInfo();
+
   bool Modified = false;
 
   // Run passes in a loop until convergence. Branch complement
