@@ -1951,6 +1951,16 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::PHA);
   }
 
+  // IMPORTANT: If Src2Reg is A and Src1Reg is NOT A, we must save A to scratch
+  // BEFORE moving Src1Reg to A, otherwise TXA/TYA will overwrite the A value
+  // we need for the AND.
+  bool NeedToSaveSrc2 = (Src2Reg == W65816::A && Src1Reg != W65816::A);
+  if (NeedToSaveSrc2) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
+  }
+
   // First, ensure src1 is in A
   if (Src1Reg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
@@ -1977,10 +1987,14 @@ bool W65816ExpandPseudo::expandAND16rr(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::A) {
-    // AND A with itself is A - store A to DP scratch, AND from DP
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
-        .addReg(W65816::A)
-        .addImm(SCRATCH_DP_ADDR);
+    // If we already saved A to scratch, just AND from there
+    // Otherwise, this is AND A with A (no-op for AND, but store+AND for
+    // pattern)
+    if (!NeedToSaveSrc2) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    }
     BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
   } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
@@ -2100,6 +2114,16 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::PHA);
   }
 
+  // IMPORTANT: If Src2Reg is A and Src1Reg is NOT A, we must save A to scratch
+  // BEFORE moving Src1Reg to A, otherwise TXA/TYA will overwrite the A value
+  // we need for the ORA.
+  bool NeedToSaveSrc2 = (Src2Reg == W65816::A && Src1Reg != W65816::A);
+  if (NeedToSaveSrc2) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
+  }
+
   // First, ensure src1 is in A
   if (Src1Reg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
@@ -2126,10 +2150,13 @@ bool W65816ExpandPseudo::expandOR16rr(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::A) {
-    // OR A with itself is A - store A to DP scratch, ORA from DP
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
-        .addReg(W65816::A)
-        .addImm(SCRATCH_DP_ADDR);
+    // If we already saved A to scratch, just ORA from there
+    // Otherwise, this is OR A with A (no-op for OR, but store+ORA for pattern)
+    if (!NeedToSaveSrc2) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    }
     BuildMI(MBB, MBBI, DL, TII->get(W65816::ORA_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
   } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
@@ -2249,6 +2276,16 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
     buildMI(MBB, MBBI, W65816::PHA);
   }
 
+  // IMPORTANT: If Src2Reg is A and Src1Reg is NOT A, we must save A to scratch
+  // BEFORE moving Src1Reg to A, otherwise TXA/TYA will overwrite the A value
+  // we need for the EOR.
+  bool NeedToSaveSrc2 = (Src2Reg == W65816::A && Src1Reg != W65816::A);
+  if (NeedToSaveSrc2) {
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(SCRATCH_DP_ADDR);
+  }
+
   // First, ensure src1 is in A
   if (Src1Reg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
@@ -2275,10 +2312,13 @@ bool W65816ExpandPseudo::expandXOR16rr(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
   } else if (Src2Reg == W65816::A) {
-    // XOR A with itself is 0 - store A to DP scratch, EOR from DP
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
-        .addReg(W65816::A)
-        .addImm(SCRATCH_DP_ADDR);
+    // If we already saved A to scratch, just EOR from there
+    // Otherwise, this is XOR A with A (results in 0)
+    if (!NeedToSaveSrc2) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    }
     BuildMI(MBB, MBBI, DL, TII->get(W65816::EOR_dp), W65816::A)
         .addImm(SCRATCH_DP_ADDR);
   } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
