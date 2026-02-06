@@ -743,6 +743,13 @@ let Defs = [P], Predicates = [UseIdx16Bit] in {
                              "ldx\t$addr",
                              [(set X16:$dst, (load addr:$addr))]>;
 
+  // LDX direct page - Load X from DP address
+  // Opcode: $A6, 2 bytes
+  def LDX_dp : W65816Inst16<0xA6, (outs X16:$dst), (ins addr8dp:$imm),
+                            "ldx\t$imm", []> {
+    let mayLoad = 1;
+  }
+
   // LDX direct page,Y - Load X from DP address indexed by Y
   // Opcode: $B6, 2 bytes
   def LDX_dpY : W65816Inst16<0xB6, (outs X16:$dst), (ins addr8dp:$imm),
@@ -758,6 +765,13 @@ let Defs = [P], Predicates = [UseIdx16Bit] in {
 
   def LDY_abs : W65816Inst24<0xAC, (outs IDX16:$dst), (ins addr16:$addr),
                              "ldy\t$addr", []>;
+
+  // LDY direct page - Load Y from DP address
+  // Opcode: $A4, 2 bytes
+  def LDY_dp : W65816Inst16<0xA4, (outs Y16:$dst), (ins addr8dp:$imm),
+                            "ldy\t$imm", []> {
+    let mayLoad = 1;
+  }
 
   // LDY direct page,X - Load Y from DP address indexed by X
   // Opcode: $B4, 2 bytes
@@ -924,12 +938,20 @@ let Defs = [P] in {
   def CPX_imm16 : W65816Inst24<0xE0, (outs), (ins imm16:$addr),
                                "cpx\t#$addr", []>;
 
+  // CPX direct page
+  def CPX_dp : W65816Inst16<0xE4, (outs), (ins addr8dp:$imm),
+                            "cpx\t$imm", []>;
+
   // CPY - Compare Y Register
   def CPY_imm8 : W65816Inst16<0xC0, (outs), (ins imm8:$imm),
                               "cpy\t#$imm", []>;
 
   def CPY_imm16 : W65816Inst24<0xC0, (outs), (ins imm16:$addr),
                                "cpy\t#$addr", []>;
+
+  // CPY direct page
+  def CPY_dp : W65816Inst16<0xC4, (outs), (ins addr8dp:$imm),
+                            "cpy\t$imm", []>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1835,7 +1857,9 @@ let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
 
 // Select pseudos - expanded in ExpandPseudo pass (after branch folding)
 // These require multi-instruction sequences for proper N!=V or N==V checks
-let Uses = [P] in {
+// Select pseudos clobber A because expansion routes values through A
+// to move between registers. Uses P flags set by the preceding CMP/SCMP.
+let Uses = [P], Defs = [A] in {
   def Select16_SLT : Pseudo<(outs GPR16:$dst),
                             (ins GPR16:$trueVal, GPR16:$falseVal),
                             "# Select16_SLT $dst, $trueVal, $falseVal", []>;
@@ -1870,18 +1894,25 @@ let Uses = [P] in {
                             "# Select16_CS $dst, $trueVal, $falseVal", []>;
 }
 
-// Compare two registers pseudo - sets flags for subsequent branch
-// Expands to: get src1 to A, use DP scratch for src2, SEC + SBC
-// NOTE: Clobbers A because comparison always uses A for the subtraction
-let Defs = [A, P] in {
+// Unsigned compare - uses CMP/CPX/CPY hardware instructions (non-destructive).
+// Does NOT clobber any register for the common case (physical register operands).
+// Only sets N, Z, C flags (NOT V). Use SCMP for signed comparisons.
+let Defs = [P] in {
   def CMP16rr : Pseudo<(outs), (ins GPR16:$src1, GPR16:$src2),
                        "# CMP16rr $src1, $src2", []>;
 
-  // Compare register with immediate - more efficient for constants
-  // Expands to: get src to A, cmp #imm
-  // NOTE: Clobbers A because comparison uses A for the subtraction
   def CMP16ri : Pseudo<(outs), (ins GPR16:$src, i16imm:$imm),
                        "# CMP16ri $src, $imm", []>;
+}
+
+// Signed compare - uses SEC + SBC to correctly set N, Z, C, AND V flags.
+// Clobbers A because SBC always works through the accumulator.
+let Defs = [A, P] in {
+  def SCMP16rr : Pseudo<(outs), (ins GPR16:$src1, GPR16:$src2),
+                        "# SCMP16rr $src1, $src2", []>;
+
+  def SCMP16ri : Pseudo<(outs), (ins GPR16:$src, i16imm:$imm),
+                        "# SCMP16ri $src, $imm", []>;
 }
 
 // Conditional branch pseudo - branches based on condition code
@@ -1895,35 +1926,41 @@ let isBranch = 1, isTerminator = 1, Uses = [P] in {
 //===----------------------------------------------------------------------===//
 
 // Shift left by immediate amount - expands to multiple ASL instructions
-// Output is ACC16 because all shift operations use the accumulator on W65816.
-// If the result needs to be in X or Y, the register allocator will insert COPY.
+// Output is GPR16 to give the register allocator flexibility in placing results.
+// The expansion code handles moving the result from A to X/Y/imaginary if needed,
+// following the same pattern as ADD16rr/AND16rr (LivePhysRegs A-save/restore).
 // Note: Shift amounts are i16 (getScalarShiftAmountTy returns i16 since i8 isn't legal)
+// NOTE: A is not in Defs to avoid register pressure on our 3-register arch.
+// The expansion code uses LivePhysRegs to save/restore A when live.
 let Defs = [P] in {
-  def SHL16ri : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, imm16:$amt),
+  def SHL16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$amt),
                        "# SHL16ri $dst, $src, $amt",
-                       [(set ACC16:$dst, (shl GPR16:$src, (i16 imm:$amt)))]>;
+                       [(set GPR16:$dst, (shl GPR16:$src, (i16 imm:$amt)))]>;
 
-  def SRL16ri : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, imm16:$amt),
+  def SRL16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$amt),
                        "# SRL16ri $dst, $src, $amt",
-                       [(set ACC16:$dst, (srl GPR16:$src, (i16 imm:$amt)))]>;
+                       [(set GPR16:$dst, (srl GPR16:$src, (i16 imm:$amt)))]>;
 
-  def SRA16ri : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, imm16:$amt),
+  def SRA16ri : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, imm16:$amt),
                        "# SRA16ri $dst, $src, $amt",
-                       [(set ACC16:$dst, (sra GPR16:$src, (i16 imm:$amt)))]>;
+                       [(set GPR16:$dst, (sra GPR16:$src, (i16 imm:$amt)))]>;
+}
 
-  // Variable amount shifts - expand to loops
-  // Shift amount is i16 (promoted from i8)
-  def SHL16rv : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, GPR16:$amt),
+// Variable amount shifts - expand to loops
+// Shift amount is i16 (promoted from i8)
+// X is always clobbered (used as loop counter), A handled by LivePhysRegs.
+let Defs = [X, P] in {
+  def SHL16rv : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, GPR16:$amt),
                        "# SHL16rv $dst, $src, $amt",
-                       [(set ACC16:$dst, (shl GPR16:$src, GPR16:$amt))]>;
+                       [(set GPR16:$dst, (shl GPR16:$src, GPR16:$amt))]>;
 
-  def SRL16rv : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, GPR16:$amt),
+  def SRL16rv : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, GPR16:$amt),
                        "# SRL16rv $dst, $src, $amt",
-                       [(set ACC16:$dst, (srl GPR16:$src, GPR16:$amt))]>;
+                       [(set GPR16:$dst, (srl GPR16:$src, GPR16:$amt))]>;
 
-  def SRA16rv : Pseudo<(outs ACC16:$dst), (ins GPR16:$src, GPR16:$amt),
+  def SRA16rv : Pseudo<(outs GPR16:$dst), (ins GPR16:$src, GPR16:$amt),
                        "# SRA16rv $dst, $src, $amt",
-                       [(set ACC16:$dst, (sra GPR16:$src, GPR16:$amt))]>;
+                       [(set GPR16:$dst, (sra GPR16:$src, GPR16:$amt))]>;
 }
 
 //===----------------------------------------------------------------------===//

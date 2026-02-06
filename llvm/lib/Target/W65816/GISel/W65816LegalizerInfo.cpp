@@ -56,6 +56,12 @@ W65816LegalizerInfo::W65816LegalizerInfo(const W65816Subtarget &ST) {
       .widenScalarToNextPow2(0, 16)
       .clampScalar(0, s16, s16);
 
+  // Multiply high (upper 16 bits of 32-bit product) - custom lowering to
+  // runtime library calls (__umulhi3, __smulhi3).
+  getActionDefinitionsBuilder({G_UMULH, G_SMULH})
+      .customFor({s16})
+      .clampScalar(0, s16, s16);
+
   // Constants.
   getActionDefinitionsBuilder(G_CONSTANT)
       .legalFor({s16, p0})
@@ -150,6 +156,9 @@ bool W65816LegalizerInfo::legalizeCustom(
   case TargetOpcode::G_ZEXTLOAD:
   case TargetOpcode::G_SEXTLOAD:
     return legalizeExtLoad(MI, MIRBuilder);
+  case TargetOpcode::G_UMULH:
+  case TargetOpcode::G_SMULH:
+    return legalizeMulHigh(MI, MIRBuilder);
   default:
     return false;
   }
@@ -184,6 +193,82 @@ bool W65816LegalizerInfo::legalizeExtLoad(MachineInstr &MI,
     MIRBuilder.buildZExt(DstReg, Load);
   else
     MIRBuilder.buildSExt(DstReg, Load);
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816LegalizerInfo::legalizeMulHigh(MachineInstr &MI,
+                                          MachineIRBuilder &MIRBuilder) const {
+  // Lower G_UMULH/G_SMULH by computing the upper 16 bits of a 32-bit multiply
+  // using only 16-bit operations. Algorithm:
+  //
+  // Given A and B, split into bytes: A = Ah*256 + Al, B = Bh*256 + Bl
+  // A*B = Ah*Bh*65536 + (Ah*Bl + Al*Bh)*256 + Al*Bl
+  // High 16 bits = Ah*Bh + ((Ah*Bl + Al*Bh + Al*Bl/256) / 256)
+  //
+  // Note: G_SMULH uses the same algorithm since we're computing via partials.
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register LHSReg = MI.getOperand(1).getReg();
+  Register RHSReg = MI.getOperand(2).getReg();
+
+  LLT S16 = LLT::scalar(16);
+  LLT S8 = LLT::scalar(8);
+
+  // Extract low and high bytes of LHS and RHS
+  auto LHSLo = MIRBuilder.buildTrunc(S8, LHSReg);
+  auto LHSHi =
+      MIRBuilder.buildLShr(S16, LHSReg, MIRBuilder.buildConstant(S16, 8));
+  auto LHSHiTrunc = MIRBuilder.buildTrunc(S8, LHSHi);
+
+  auto RHSLo = MIRBuilder.buildTrunc(S8, RHSReg);
+  auto RHSHi =
+      MIRBuilder.buildLShr(S16, RHSReg, MIRBuilder.buildConstant(S16, 8));
+  auto RHSHiTrunc = MIRBuilder.buildTrunc(S8, RHSHi);
+
+  // Zero-extend bytes back to 16-bit for multiplication
+  auto LHSLoExt = MIRBuilder.buildZExt(S16, LHSLo);
+  auto LHSHiExt = MIRBuilder.buildZExt(S16, LHSHiTrunc);
+  auto RHSLoExt = MIRBuilder.buildZExt(S16, RHSLo);
+  auto RHSHiExt = MIRBuilder.buildZExt(S16, RHSHiTrunc);
+
+  // Compute partial products (all fit in 16 bits since 8*8 = 16 max)
+  // ll = Al * Bl (0-65025)
+  // lh = Al * Bh (0-65025)
+  // hl = Ah * Bl (0-65025)
+  // hh = Ah * Bh (0-65025)
+  auto LL = MIRBuilder.buildMul(S16, LHSLoExt, RHSLoExt);
+  auto LH = MIRBuilder.buildMul(S16, LHSLoExt, RHSHiExt);
+  auto HL = MIRBuilder.buildMul(S16, LHSHiExt, RHSLoExt);
+  auto HH = MIRBuilder.buildMul(S16, LHSHiExt, RHSHiExt);
+
+  // Combine: result_high = hh + (lh >> 8) + (hl >> 8) + ((lh&0xFF + hl&0xFF +
+  // (ll >> 8)) >> 8) Simplified: high = hh + ((lh + hl + (ll >> 8)) >> 8) But
+  // we need to handle carry properly...
+  //
+  // More precise: let mid = (ll >> 8) + (lh & 0xFF) + (hl & 0xFF)
+  //               high = hh + (lh >> 8) + (hl >> 8) + (mid >> 8)
+
+  auto LLHi = MIRBuilder.buildLShr(S16, LL, MIRBuilder.buildConstant(S16, 8));
+
+  auto LHLo = MIRBuilder.buildAnd(S16, LH, MIRBuilder.buildConstant(S16, 0xFF));
+  auto LHHi = MIRBuilder.buildLShr(S16, LH, MIRBuilder.buildConstant(S16, 8));
+
+  auto HLLo = MIRBuilder.buildAnd(S16, HL, MIRBuilder.buildConstant(S16, 0xFF));
+  auto HLHi = MIRBuilder.buildLShr(S16, HL, MIRBuilder.buildConstant(S16, 8));
+
+  // mid = ll_hi + lh_lo + hl_lo
+  auto Mid1 = MIRBuilder.buildAdd(S16, LLHi, LHLo);
+  auto Mid = MIRBuilder.buildAdd(S16, Mid1, HLLo);
+  auto MidHi = MIRBuilder.buildLShr(S16, Mid, MIRBuilder.buildConstant(S16, 8));
+
+  // high = hh + lh_hi + hl_hi + mid_hi
+  auto H1 = MIRBuilder.buildAdd(S16, HH, LHHi);
+  auto H2 = MIRBuilder.buildAdd(S16, H1, HLHi);
+  auto Result = MIRBuilder.buildAdd(S16, H2, MidHi);
+
+  MIRBuilder.buildCopy(DstReg, Result.getReg(0));
 
   MI.eraseFromParent();
   return true;

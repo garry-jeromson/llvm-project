@@ -48,12 +48,13 @@ define i16 @multi_add(i16 %a, i16 %b, i16 %c) {
 }
 
 ; Test 4: Branch to fall-through should be eliminated
-; The conditional branch pattern should NOT have a BRA to the next block
+; The conditional branch pattern should NOT have an unconditional branch to the next block
 define i16 @branch_fallthrough(i16 %x) {
 ; CHECK-LABEL: branch_fallthrough:
 ; CHECK:       cmp #42
 ; CHECK-NEXT:  bne .LBB{{[0-9]+}}_2
 ; CHECK-NOT:   bra
+; CHECK-NOT:   jmp
 ; CHECK:       lda #1
 ; CHECK-NEXT:  rts
 entry:

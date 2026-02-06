@@ -175,6 +175,8 @@ private:
   bool expandSUB16ri(Block &MBB, BlockIt MBBI);
   bool expandCMP16rr(Block &MBB, BlockIt MBBI);
   bool expandCMP16ri(Block &MBB, BlockIt MBBI);
+  bool expandSCMP16rr(Block &MBB, BlockIt MBBI);
+  bool expandSCMP16ri(Block &MBB, BlockIt MBBI);
   bool expandBR_CC(Block &MBB, BlockIt MBBI);
   bool expandSHL16ri(Block &MBB, BlockIt MBBI);
   bool expandSRL16ri(Block &MBB, BlockIt MBBI);
@@ -315,6 +317,10 @@ bool W65816ExpandPseudo::expandMI(Block &MBB, BlockIt MBBI) {
     return expandCMP16rr(MBB, MBBI);
   case W65816::CMP16ri:
     return expandCMP16ri(MBB, MBBI);
+  case W65816::SCMP16rr:
+    return expandSCMP16rr(MBB, MBBI);
+  case W65816::SCMP16ri:
+    return expandSCMP16ri(MBB, MBBI);
   case W65816::BR_CC:
     return expandBR_CC(MBB, MBBI);
   case W65816::SHL16ri:
@@ -898,16 +904,361 @@ bool W65816ExpandPseudo::expandCMP16rr(Block &MBB, BlockIt MBBI) {
   MachineInstr &MI = *MBBI;
   DebugLoc DL = MI.getDebugLoc();
 
-  // CMP16rr $src1, $src2
-  // Compare src1 with src2 by using SEC + SBC which sets flags.
-  // After comparison, only flags matter - registers can be clobbered.
-  // The branch target blocks will load their own values.
+  // CMP16rr $src1, $src2 - UNSIGNED comparison
+  // Uses non-destructive CMP/CPX/CPY hardware instructions.
+  // Sets N, Z, C flags (NOT V). Does NOT clobber any register.
+  //
+  // Strategy for imaginary register src1:
+  //   Use LDX_dp/LDY_dp to load to X or Y, then CPX/CPY.
+  //   This avoids clobbering A. LDX/LDY do set N/Z flags but
+  //   the CPX/CPY that follows overwrites those flags anyway.
+  //   If X or Y needs saving, save to DP scratch (not stack, to avoid
+  //   flag corruption from PLA). Restore via LDX_dp/LDY_dp BEFORE the
+  //   CPX/CPY comparison — the comparison then sets the final flags.
+  //
+  // Wait — we can't restore the saved register before CPX/CPY because
+  // we need the loaded value in the register for the comparison.
+  // And we can't restore after, because LDX_dp/LDY_dp clobber N/Z flags.
+  //
+  // Better approach: if we must save a register, use PHP/PLP around the
+  // restore. Or: save src2 to scratch, then we can use the index register
+  // freely since src2 is in scratch.
+  //
+  // Actually, the simplest correct approach:
+  //   1. Find a free index register (X or Y) that is NOT src2
+  //   2. If none free, save one to scratch (we can restore after CPX/CPY
+  //      because the branch instruction reads flags immediately after CMP,
+  //      and the restore is AFTER CMP but BEFORE the branch in the same BB?
+  //      No — we insert before MBBI which is the CMP pseudo, so everything
+  //      goes before the next instruction which reads the flags.)
+  //
+  // Correct approach: After the CMP/CPX/CPY, the next instruction reads flags.
+  // We must not insert anything between CPX/CPY and that next instruction
+  // that clobbers flags. But we insert at MBBI position and erase MI,
+  // so all our instructions go before the next real instruction. We need
+  // PHP after CPX/CPY, restore register, PLP. But that's 4 extra instructions.
+  //
+  // Simplest correct approach for imaginary src1:
+  //   - If X is free and X != src2: LDX_dp(src1), then compare with src2
+  //   - If Y is free and Y != src2: LDY_dp(src1), then compare with src2
+  //   - If both X and Y are occupied: use PHP/PLP to preserve flags around
+  //     the register save/restore
 
   Register Src1Reg = MI.getOperand(0).getReg();
   Register Src2Reg = MI.getOperand(1).getReg();
 
-  // Use DP scratch for the comparison operand - simpler and faster
-  // than stack-relative addressing.
+  if (W65816::IMAG16RegClass.contains(Src1Reg)) {
+    unsigned Src1DPAddr = getImaginaryRegDPAddr(Src1Reg);
+
+    // Use LivePhysRegs to find a free index register
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I)
+      LiveRegs.stepBackward(*I);
+
+    bool XLive = LiveRegs.contains(W65816::X);
+    bool YLive = LiveRegs.contains(W65816::Y);
+    bool ALive = LiveRegs.contains(W65816::A);
+
+    // Pick the best register to load src1 into:
+    // Prefer a free register that isn't src2
+    Register UseReg = Register();
+    bool NeedSave = false;
+    bool UseAPath = false;
+
+    if (!XLive && Src2Reg != W65816::X) {
+      UseReg = W65816::X;
+    } else if (!YLive && Src2Reg != W65816::Y) {
+      UseReg = W65816::Y;
+    } else if (!ALive) {
+      // A is free — use LDA + CMP path (smaller than PHP/PLP fallback)
+      UseAPath = true;
+    } else if (Src2Reg != W65816::X) {
+      // X is live but we must use it; save and restore
+      UseReg = W65816::X;
+      NeedSave = true;
+    } else {
+      // Y is live but we must use it; save and restore
+      UseReg = W65816::Y;
+      NeedSave = true;
+    }
+
+    if (UseAPath) {
+      // A is dead — use LDA_dp(src1) + CMP for a compact comparison
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(Src1DPAddr);
+      if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+        unsigned Src2DPAddr = getImaginaryRegDPAddr(Src2Reg);
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_dp))
+            .addReg(W65816::A)
+            .addImm(Src2DPAddr);
+      } else if (Src2Reg == W65816::X) {
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+            .addReg(W65816::X)
+            .addImm(SCRATCH_DP_ADDR);
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_dp))
+            .addReg(W65816::A)
+            .addImm(SCRATCH_DP_ADDR);
+      } else if (Src2Reg == W65816::Y) {
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+            .addReg(W65816::Y)
+            .addImm(SCRATCH_DP_ADDR);
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_dp))
+            .addReg(W65816::A)
+            .addImm(SCRATCH_DP_ADDR);
+      }
+    } else {
+      if (NeedSave) {
+        // Save the register to DP scratch
+        if (UseReg == W65816::X) {
+          BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+              .addReg(W65816::X)
+              .addImm(SCRATCH_DP_ADDR);
+        } else {
+          BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+              .addReg(W65816::Y)
+              .addImm(SCRATCH_DP_ADDR);
+        }
+      }
+
+      // Load imaginary src1 to the chosen register
+      if (UseReg == W65816::X) {
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_dp), W65816::X)
+            .addImm(Src1DPAddr);
+      } else {
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_dp), W65816::Y)
+            .addImm(Src1DPAddr);
+      }
+
+      // Now compare UseReg with src2
+      if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+        unsigned Src2DPAddr = getImaginaryRegDPAddr(Src2Reg);
+        if (UseReg == W65816::X)
+          BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_dp)).addImm(Src2DPAddr);
+        else
+          BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_dp)).addImm(Src2DPAddr);
+      } else if (Src2Reg == W65816::A) {
+        // Need to store A to a temp location for CPX/CPY
+        // We can't use SCRATCH_DP_ADDR if we saved a register there
+        if (NeedSave) {
+          // Use SCRATCH_DP_ADDR - 2 as a second scratch location
+          BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+              .addReg(W65816::A)
+              .addImm(SCRATCH_DP_ADDR - 2);
+          if (UseReg == W65816::X)
+            BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_dp))
+                .addImm(SCRATCH_DP_ADDR - 2);
+          else
+            BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_dp))
+                .addImm(SCRATCH_DP_ADDR - 2);
+        } else {
+          BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+              .addReg(W65816::A)
+              .addImm(SCRATCH_DP_ADDR);
+          if (UseReg == W65816::X)
+            BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_dp))
+                .addImm(SCRATCH_DP_ADDR);
+          else
+            BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_dp))
+                .addImm(SCRATCH_DP_ADDR);
+        }
+      } else if (Src2Reg == W65816::X) {
+        // src1 loaded to Y (since UseReg != src2), compare Y with X
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+            .addReg(W65816::X)
+            .addImm(NeedSave ? SCRATCH_DP_ADDR - 2 : SCRATCH_DP_ADDR);
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_dp))
+            .addImm(NeedSave ? SCRATCH_DP_ADDR - 2 : SCRATCH_DP_ADDR);
+      } else if (Src2Reg == W65816::Y) {
+        // src1 loaded to X (since UseReg != src2), compare X with Y
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+            .addReg(W65816::Y)
+            .addImm(NeedSave ? SCRATCH_DP_ADDR - 2 : SCRATCH_DP_ADDR);
+        BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_dp))
+            .addImm(NeedSave ? SCRATCH_DP_ADDR - 2 : SCRATCH_DP_ADDR);
+      }
+
+      if (NeedSave) {
+        // Restore the saved register. We use PHP/PLP to preserve flags.
+        buildMI(MBB, MBBI, W65816::PHP);
+        if (UseReg == W65816::X) {
+          BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_dp), W65816::X)
+              .addImm(SCRATCH_DP_ADDR);
+        } else {
+          BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_dp), W65816::Y)
+              .addImm(SCRATCH_DP_ADDR);
+        }
+        buildMI(MBB, MBBI, W65816::PLP);
+      }
+    } // end of !UseAPath
+  } else if (Src1Reg == W65816::A) {
+    // src1 is A - use CMP directly
+    if (Src2Reg == W65816::A) {
+      // CMP A with A - always equal. Use CMP with DP scratch.
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::X) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+          .addReg(W65816::X)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::Y) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+          .addReg(W65816::Y)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+    } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_dp))
+          .addReg(W65816::A)
+          .addImm(DPAddr);
+    }
+  } else if (Src1Reg == W65816::X) {
+    // src1 is X - use CPX
+    if (Src2Reg == W65816::A) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_dp)).addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::X) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+          .addReg(W65816::X)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_dp)).addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::Y) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+          .addReg(W65816::Y)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_dp)).addImm(SCRATCH_DP_ADDR);
+    } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_dp)).addImm(DPAddr);
+    }
+  } else if (Src1Reg == W65816::Y) {
+    // src1 is Y - use CPY
+    if (Src2Reg == W65816::A) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+          .addReg(W65816::A)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_dp)).addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::X) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+          .addReg(W65816::X)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_dp)).addImm(SCRATCH_DP_ADDR);
+    } else if (Src2Reg == W65816::Y) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STY_dp))
+          .addReg(W65816::Y)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_dp)).addImm(SCRATCH_DP_ADDR);
+    } else if (W65816::IMAG16RegClass.contains(Src2Reg)) {
+      unsigned DPAddr = getImaginaryRegDPAddr(Src2Reg);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_dp)).addImm(DPAddr);
+    }
+  }
+
+  // Flags are now set based on src1 - src2:
+  // - N = 1 if result is negative (in 16-bit context)
+  // - Z = 1 if result is zero (src1 == src2)
+  // - C = 1 if no borrow (src1 >= src2 unsigned)
+  // - V is NOT set by CMP/CPX/CPY (use SCMP16rr for signed comparisons)
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandCMP16ri(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // CMP16ri $src, $imm
+  // Compare src with immediate using the appropriate compare instruction.
+  // Use CMP for A, CPX for X, CPY for Y to avoid clobbering other registers.
+
+  Register SrcReg = MI.getOperand(0).getReg();
+  int64_t Imm = MI.getOperand(1).getImm();
+
+  if (SrcReg == W65816::A) {
+    // Use CMP_imm16 for A register
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
+        .addReg(W65816::A)
+        .addImm(Imm);
+  } else if (SrcReg == W65816::X) {
+    // Use CPX_imm16 for X register (doesn't clobber A)
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(Imm);
+  } else if (SrcReg == W65816::Y) {
+    // Use CPY_imm16 for Y register (doesn't clobber A)
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_imm16)).addImm(Imm);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    // Load imaginary register to X or Y, then use CPX/CPY with immediate.
+    // This avoids clobbering A (Defs=[P] only).
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I)
+      LiveRegs.stepBackward(*I);
+
+    bool XLive = LiveRegs.contains(W65816::X);
+    bool YLive = LiveRegs.contains(W65816::Y);
+    bool ALive = LiveRegs.contains(W65816::A);
+
+    if (!XLive) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_dp), W65816::X)
+          .addImm(DPAddr);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(Imm);
+    } else if (!YLive) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDY_dp), W65816::Y)
+          .addImm(DPAddr);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_imm16)).addImm(Imm);
+    } else if (!ALive) {
+      // A is dead — use LDA_dp + CMP_imm16 (5 bytes, no save/restore)
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A)
+          .addImm(DPAddr);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
+          .addReg(W65816::A)
+          .addImm(Imm);
+    } else {
+      // All registers live. Save X to scratch, use it, restore with
+      // PHP/PLP to preserve flags.
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::STX_dp))
+          .addReg(W65816::X)
+          .addImm(SCRATCH_DP_ADDR);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_dp), W65816::X)
+          .addImm(DPAddr);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(Imm);
+      // Restore X, preserving flags from CPX
+      buildMI(MBB, MBBI, W65816::PHP);
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LDX_dp), W65816::X)
+          .addImm(SCRATCH_DP_ADDR);
+      buildMI(MBB, MBBI, W65816::PLP);
+    }
+  } else {
+    llvm_unreachable("CMP16ri with non-physical register");
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
+bool W65816ExpandPseudo::expandSCMP16rr(Block &MBB, BlockIt MBBI) {
+  MachineInstr &MI = *MBBI;
+  DebugLoc DL = MI.getDebugLoc();
+
+  // SCMP16rr $src1, $src2 - SIGNED comparison
+  // Uses SEC + SBC to correctly set N, Z, C, AND V flags.
+  // Clobbers A (declared in Defs).
+
+  Register Src1Reg = MI.getOperand(0).getReg();
+  Register Src2Reg = MI.getOperand(1).getReg();
 
   // IMPORTANT: If src2 is in A and we need to move src1 to A,
   // we must save src2 first before it gets overwritten!
@@ -963,7 +1314,6 @@ bool W65816ExpandPseudo::expandCMP16rr(Block &MBB, BlockIt MBBI) {
           .addImm(SCRATCH_DP_ADDR);
     } else if (Src2Reg == W65816::A) {
       // src1 is also A (comparing A with itself - always equal)
-      // A - A = 0, sets Z=1, N=0, V=0, C=1
       BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
           .addReg(W65816::A)
           .addImm(SCRATCH_DP_ADDR);
@@ -987,38 +1337,31 @@ bool W65816ExpandPseudo::expandCMP16rr(Block &MBB, BlockIt MBBI) {
   return true;
 }
 
-bool W65816ExpandPseudo::expandCMP16ri(Block &MBB, BlockIt MBBI) {
+bool W65816ExpandPseudo::expandSCMP16ri(Block &MBB, BlockIt MBBI) {
   MachineInstr &MI = *MBBI;
   DebugLoc DL = MI.getDebugLoc();
 
-  // CMP16ri $src, $imm
-  // Compare src with immediate using the appropriate compare instruction.
-  // Use CMP for A, CPX for X, CPY for Y to avoid clobbering other registers.
+  // SCMP16ri $src, $imm - SIGNED comparison with immediate
+  // Uses SEC + SBC to correctly set N, Z, C, AND V flags.
+  // Clobbers A (declared in Defs).
 
   Register SrcReg = MI.getOperand(0).getReg();
   int64_t Imm = MI.getOperand(1).getImm();
 
-  if (SrcReg == W65816::A) {
-    // Use CMP_imm16 for A register
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
-        .addReg(W65816::A)
-        .addImm(Imm);
-  } else if (SrcReg == W65816::X) {
-    // Use CPX_imm16 for X register (doesn't clobber A)
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::CPX_imm16)).addImm(Imm);
+  // Get src to A
+  if (SrcReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
-    // Use CPY_imm16 for Y register (doesn't clobber A)
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::CPY_imm16)).addImm(Imm);
+    buildMI(MBB, MBBI, W65816::TYA);
   } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
-    // Load imaginary register to A, then compare with immediate
     unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
-        .addReg(W65816::A)
-        .addImm(Imm);
-  } else {
-    llvm_unreachable("CMP16ri with non-physical register");
   }
+  // If SrcReg == A, it's already there
+
+  // SEC + SBC to correctly set V flag for signed comparison
+  buildMI(MBB, MBBI, W65816::SEC);
+  BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_imm16), W65816::A).addImm(Imm);
 
   MI.eraseFromParent();
   return true;
@@ -1313,16 +1656,35 @@ bool W65816ExpandPseudo::expandSHL16ri(Block &MBB, BlockIt MBBI) {
 
   // SHL16ri $dst, $src, $amt
   // Expand to multiple ASL A instructions
-  // Output is always ACC16 (A register)
+  // Output is GPR16 - result moved from A to destination if needed
 
+  Register DstReg = MI.getOperand(0).getReg();
   Register SrcReg = MI.getOperand(1).getReg();
   unsigned ShiftAmt = MI.getOperand(2).getImm();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
 
   // First, get source into A if needed
   if (SrcReg == W65816::X) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TXA));
   } else if (SrcReg == W65816::Y) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TYA));
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
   }
   // If SrcReg == A, it's already there
 
@@ -1334,17 +1696,31 @@ bool W65816ExpandPseudo::expandSHL16ri(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
         .addReg(W65816::A)
         .addImm(0xFF00);
-    MI.eraseFromParent();
-    return true;
+  } else {
+    // Emit ShiftAmt ASL A instructions
+    for (unsigned i = 0; i < ShiftAmt; ++i) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::ASL_A), W65816::A)
+          .addReg(W65816::A);
+    }
   }
 
-  // Emit ShiftAmt ASL A instructions
-  for (unsigned i = 0; i < ShiftAmt; ++i) {
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ASL_A), W65816::A)
-        .addReg(W65816::A);
+  // Move result from A to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
+  // If DstReg == A, result is already there
 
-  // Result is in A (ACC16), no need to move to destination
+  // Restore A if we saved it
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -1356,16 +1732,35 @@ bool W65816ExpandPseudo::expandSRL16ri(Block &MBB, BlockIt MBBI) {
 
   // SRL16ri $dst, $src, $amt
   // Expand to multiple LSR A instructions
-  // Output is always ACC16 (A register)
+  // Output is GPR16 - result moved from A to destination if needed
 
+  Register DstReg = MI.getOperand(0).getReg();
   Register SrcReg = MI.getOperand(1).getReg();
   unsigned ShiftAmt = MI.getOperand(2).getImm();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
 
   // First, get source into A if needed
   if (SrcReg == W65816::X) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TXA));
   } else if (SrcReg == W65816::Y) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TYA));
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
   }
 
   // Optimization: lshr by 8 can use XBA + AND
@@ -1376,33 +1771,43 @@ bool W65816ExpandPseudo::expandSRL16ri(Block &MBB, BlockIt MBBI) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::AND_imm16), W65816::A)
         .addReg(W65816::A)
         .addImm(0x00FF);
-    MI.eraseFromParent();
-    return true;
-  }
-
-  // Optimization: lshr by 15 extracts the sign bit (bit 15).
-  // Instead of 15 LSR instructions, use:
-  //   ASL A    ; shift bit 15 into carry
-  //   LDA #0   ; clear A
-  //   ROL A    ; rotate carry into bit 0 (A = 0 or 1)
-  // This is 3 instructions vs 15, and avoids register pressure issues.
-  if (ShiftAmt == 15) {
+  } else if (ShiftAmt == 15) {
+    // Optimization: lshr by 15 extracts the sign bit (bit 15).
+    // Instead of 15 LSR instructions, use:
+    //   ASL A    ; shift bit 15 into carry
+    //   LDA #0   ; clear A
+    //   ROL A    ; rotate carry into bit 0 (A = 0 or 1)
+    // This is 3 instructions vs 15, and avoids register pressure issues.
     BuildMI(MBB, MBBI, DL, TII->get(W65816::ASL_A), W65816::A)
         .addReg(W65816::A);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_imm16), W65816::A).addImm(0);
     BuildMI(MBB, MBBI, DL, TII->get(W65816::ROL_A), W65816::A)
         .addReg(W65816::A);
-    MI.eraseFromParent();
-    return true;
+  } else {
+    // Emit ShiftAmt LSR A instructions
+    for (unsigned i = 0; i < ShiftAmt; ++i) {
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::LSR_A), W65816::A)
+          .addReg(W65816::A);
+    }
   }
 
-  // Emit ShiftAmt LSR A instructions
-  for (unsigned i = 0; i < ShiftAmt; ++i) {
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::LSR_A), W65816::A)
-        .addReg(W65816::A);
+  // Move result from A to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
   }
+  // If DstReg == A, result is already there
 
-  // Result is in A (ACC16), no need to move to destination
+  // Restore A if we saved it
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -1414,16 +1819,35 @@ bool W65816ExpandPseudo::expandSRA16ri(Block &MBB, BlockIt MBBI) {
 
   // SRA16ri $dst, $src, $amt
   // Arithmetic shift right - preserves sign bit
-  // Output is always ACC16 (A register)
+  // Output is GPR16 - result moved from A to destination if needed
 
+  Register DstReg = MI.getOperand(0).getReg();
   Register SrcReg = MI.getOperand(1).getReg();
   unsigned ShiftAmt = MI.getOperand(2).getImm();
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
 
   // First, get source into A if needed
   if (SrcReg == W65816::X) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TXA));
   } else if (SrcReg == W65816::Y) {
     BuildMI(MBB, MBBI, DL, TII->get(W65816::TYA));
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
   }
 
   // Optimization: ashr by 8 can use XBA + sign extension trick.
@@ -1447,34 +1871,47 @@ bool W65816ExpandPseudo::expandSRA16ri(Block &MBB, BlockIt MBBI) {
     // Note: SBC_imm16 only takes the immediate, A is implicit
     BuildMI(MBB, MBBI, DL, TII->get(W65816::SBC_imm16), W65816::A)
         .addImm(0x0080);
-    MI.eraseFromParent();
-    return true;
+  } else {
+    // For arithmetic shift right, we need to:
+    // 1. Check if negative (bit 15 set)
+    // 2. Shift right with carry
+    // 3. Set bit 15 if was negative
+    //
+    // A simpler approach: use CMP to set carry based on sign, then ROR
+    // CMP #$8000 sets carry if A >= $8000 (negative in signed)
+    //
+    // For each shift:
+    //   CMP #$8000  ; Sets carry if A >= $8000 (high bit set)
+    //   ROR A       ; Rotate right through carry (preserves sign)
+
+    for (unsigned i = 0; i < ShiftAmt; ++i) {
+      // Set carry to match sign bit
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
+          .addReg(W65816::A)
+          .addImm(0x8000);
+      // Rotate right through carry (sign bit preserved)
+      BuildMI(MBB, MBBI, DL, TII->get(W65816::ROR_A), W65816::A)
+          .addReg(W65816::A);
+    }
   }
 
-  // For arithmetic shift right, we need to:
-  // 1. Check if negative (bit 15 set)
-  // 2. Shift right with carry
-  // 3. Set bit 15 if was negative
-  //
-  // A simpler approach: use CMP to set carry based on sign, then ROR
-  // CMP #$8000 sets carry if A >= $8000 (negative in signed)
-  // Actually, easiest is: for each shift, copy sign to carry then ROR
-  //
-  // For each shift:
-  //   CMP #$8000  ; Sets carry if A >= $8000 (high bit set)
-  //   ROR A       ; Rotate right through carry (preserves sign)
-
-  for (unsigned i = 0; i < ShiftAmt; ++i) {
-    // Set carry to match sign bit
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::CMP_imm16))
+  // Move result from A to destination if needed
+  if (DstReg == W65816::X) {
+    buildMI(MBB, MBBI, W65816::TAX);
+  } else if (DstReg == W65816::Y) {
+    buildMI(MBB, MBBI, W65816::TAY);
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::STA_dp))
         .addReg(W65816::A)
-        .addImm(0x8000);
-    // Rotate right through carry (sign bit preserved)
-    BuildMI(MBB, MBBI, DL, TII->get(W65816::ROR_A), W65816::A)
-        .addReg(W65816::A);
+        .addImm(DPAddr);
   }
+  // If DstReg == A, result is already there
 
-  // Result is in A (ACC16), no need to move to destination
+  // Restore A if we saved it
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PLA);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -1934,9 +2371,10 @@ bool W65816ExpandPseudo::expandSHL16rv(Block &MBB, BlockIt MBBI) {
 
   // SHL16rv $dst, $src, $amt
   // Expand to a loop: while (amt--) { src <<= 1; }
-  // Output is always ACC16 (A register)
+  // Output is GPR16 - result moved from A to destination if needed
   //
   // Generated code:
+  //   [save A if needed]
   //   [get src to A, amt to X]
   //   cpx #0
   //   beq done
@@ -1945,22 +2383,40 @@ bool W65816ExpandPseudo::expandSHL16rv(Block &MBB, BlockIt MBBI) {
   //   dex
   //   bne loop
   // done:
-  //   [result in A]
+  //   [move result to dst]
+  //   [restore A if needed]
 
+  Register DstReg = MI.getOperand(0).getReg();
   Register SrcReg = MI.getOperand(1).getReg();
   Register AmtReg = MI.getOperand(2).getReg();
 
   // Determine which 16-bit register corresponds to the 8-bit amt register
   // AL/A -> A, XL/X -> X, YL/Y -> Y
   bool AmtInA = (AmtReg == W65816::AL || AmtReg == W65816::A);
-  bool AmtInY = (AmtReg == W65816::YL || AmtReg == W65816::Y);
-  (void)AmtInY; // Silence unused variable warning
+
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
 
   // Get source into A
   if (SrcReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
   }
 
   // Get amount into X (we'll use X as counter)
@@ -1975,6 +2431,13 @@ bool W65816ExpandPseudo::expandSHL16rv(Block &MBB, BlockIt MBBI) {
     // Move Y to X for use as counter (but preserve Y and A)
     buildMI(MBB, MBBI, W65816::PHA); // save A (source)
     buildMI(MBB, MBBI, W65816::TYA);
+    buildMI(MBB, MBBI, W65816::TAX);
+    buildMI(MBB, MBBI, W65816::PLA); // restore A (source)
+  } else if (W65816::IMAG16RegClass.contains(AmtReg)) {
+    // Load imaginary register to X via A
+    buildMI(MBB, MBBI, W65816::PHA); // save A (source)
+    unsigned DPAddr = getImaginaryRegDPAddr(AmtReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
     buildMI(MBB, MBBI, W65816::TAX);
     buildMI(MBB, MBBI, W65816::PLA); // restore A (source)
   }
@@ -2007,7 +2470,25 @@ bool W65816ExpandPseudo::expandSHL16rv(Block &MBB, BlockIt MBBI) {
   LoopBB->addSuccessor(LoopBB); // Loop back
   LoopBB->addSuccessor(DoneBB); // Exit
 
-  // Result is in A (ACC16), no need to move to destination
+  // Move result from A to destination and restore A at the start of DoneBB.
+  // We insert in reverse order since each insert goes to DoneBB->begin().
+  // Final order: [dst-move] [PLA if needed] [rest of block]
+
+  if (NeedToSaveA) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::PLA));
+  }
+
+  if (DstReg == W65816::X) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::TAX));
+  } else if (DstReg == W65816::Y) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::TAY));
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
+  // If DstReg == A, result is already there
 
   MI.eraseFromParent();
   return true;
@@ -2020,19 +2501,38 @@ bool W65816ExpandPseudo::expandSRL16rv(Block &MBB, BlockIt MBBI) {
 
   // SRL16rv: logical shift right by variable amount
   // Same as SHL but with LSR instead of ASL
-  // Output is always ACC16 (A register)
+  // Output is GPR16 - result moved from A to destination if needed
 
+  Register DstReg = MI.getOperand(0).getReg();
   Register SrcReg = MI.getOperand(1).getReg();
   Register AmtReg = MI.getOperand(2).getReg();
 
   bool AmtInA = (AmtReg == W65816::AL || AmtReg == W65816::A);
   bool AmtInY = (AmtReg == W65816::YL || AmtReg == W65816::Y);
 
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
   // Get source into A
   if (SrcReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
   }
 
   // Get amount into X
@@ -2043,6 +2543,12 @@ bool W65816ExpandPseudo::expandSRL16rv(Block &MBB, BlockIt MBBI) {
   } else if (AmtInY) {
     buildMI(MBB, MBBI, W65816::PHA);
     buildMI(MBB, MBBI, W65816::TYA);
+    buildMI(MBB, MBBI, W65816::TAX);
+    buildMI(MBB, MBBI, W65816::PLA);
+  } else if (W65816::IMAG16RegClass.contains(AmtReg)) {
+    buildMI(MBB, MBBI, W65816::PHA);
+    unsigned DPAddr = getImaginaryRegDPAddr(AmtReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
     buildMI(MBB, MBBI, W65816::TAX);
     buildMI(MBB, MBBI, W65816::PLA);
   }
@@ -2070,7 +2576,22 @@ bool W65816ExpandPseudo::expandSRL16rv(Block &MBB, BlockIt MBBI) {
   LoopBB->addSuccessor(LoopBB);
   LoopBB->addSuccessor(DoneBB);
 
-  // Result is in A (ACC16), no need to move to destination
+  // Move result from A to destination and restore A at the start of DoneBB.
+  // Insert in reverse order since each insert goes to DoneBB->begin().
+  if (NeedToSaveA) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::PLA));
+  }
+
+  if (DstReg == W65816::X) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::TAX));
+  } else if (DstReg == W65816::Y) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::TAY));
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -2083,19 +2604,38 @@ bool W65816ExpandPseudo::expandSRA16rv(Block &MBB, BlockIt MBBI) {
 
   // SRA16rv: arithmetic shift right by variable amount
   // Each iteration: CMP #$8000 to set carry from sign, then ROR
-  // Output is always ACC16 (A register)
+  // Output is GPR16 - result moved from A to destination if needed
 
+  Register DstReg = MI.getOperand(0).getReg();
   Register SrcReg = MI.getOperand(1).getReg();
   Register AmtReg = MI.getOperand(2).getReg();
 
   bool AmtInA = (AmtReg == W65816::AL || AmtReg == W65816::A);
   bool AmtInY = (AmtReg == W65816::YL || AmtReg == W65816::Y);
 
+  // Check if A needs to be preserved across this expansion.
+  bool NeedToSaveA = false;
+  if (DstReg != W65816::A) {
+    LivePhysRegs LiveRegs(*TRI);
+    LiveRegs.addLiveOuts(MBB);
+    for (auto I = MBB.rbegin(); &*I != &MI; ++I) {
+      LiveRegs.stepBackward(*I);
+    }
+    NeedToSaveA = LiveRegs.contains(W65816::A);
+  }
+
+  if (NeedToSaveA) {
+    buildMI(MBB, MBBI, W65816::PHA);
+  }
+
   // Get source into A
   if (SrcReg == W65816::X) {
     buildMI(MBB, MBBI, W65816::TXA);
   } else if (SrcReg == W65816::Y) {
     buildMI(MBB, MBBI, W65816::TYA);
+  } else if (W65816::IMAG16RegClass.contains(SrcReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(SrcReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
   }
 
   // Get amount into X
@@ -2106,6 +2646,12 @@ bool W65816ExpandPseudo::expandSRA16rv(Block &MBB, BlockIt MBBI) {
   } else if (AmtInY) {
     buildMI(MBB, MBBI, W65816::PHA);
     buildMI(MBB, MBBI, W65816::TYA);
+    buildMI(MBB, MBBI, W65816::TAX);
+    buildMI(MBB, MBBI, W65816::PLA);
+  } else if (W65816::IMAG16RegClass.contains(AmtReg)) {
+    buildMI(MBB, MBBI, W65816::PHA);
+    unsigned DPAddr = getImaginaryRegDPAddr(AmtReg);
+    BuildMI(MBB, MBBI, DL, TII->get(W65816::LDA_dp), W65816::A).addImm(DPAddr);
     buildMI(MBB, MBBI, W65816::TAX);
     buildMI(MBB, MBBI, W65816::PLA);
   }
@@ -2136,7 +2682,22 @@ bool W65816ExpandPseudo::expandSRA16rv(Block &MBB, BlockIt MBBI) {
   LoopBB->addSuccessor(LoopBB);
   LoopBB->addSuccessor(DoneBB);
 
-  // Result is in A (ACC16), no need to move to destination
+  // Move result from A to destination and restore A at the start of DoneBB.
+  // Insert in reverse order since each insert goes to DoneBB->begin().
+  if (NeedToSaveA) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::PLA));
+  }
+
+  if (DstReg == W65816::X) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::TAX));
+  } else if (DstReg == W65816::Y) {
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::TAY));
+  } else if (W65816::IMAG16RegClass.contains(DstReg)) {
+    unsigned DPAddr = getImaginaryRegDPAddr(DstReg);
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(W65816::STA_dp))
+        .addReg(W65816::A)
+        .addImm(DPAddr);
+  }
 
   MI.eraseFromParent();
   return true;
@@ -5355,6 +5916,19 @@ bool W65816ExpandPseudo::expandCOPY_IMAG_TO_IMAG(Block &MBB, BlockIt MBBI) {
   unsigned SrcDPAddr = getImaginaryRegDPAddr(SrcReg);
   unsigned DstDPAddr = getImaginaryRegDPAddr(DstReg);
 
+  // Check if P (processor flags) is live after this instruction.
+  // If so, we need to preserve flags since PLA clobbers N/Z.
+  LivePhysRegs LiveRegs(*TRI);
+  LiveRegs.addLiveOuts(MBB);
+  for (auto I = MBB.rbegin(); &*I != &MI; ++I)
+    LiveRegs.stepBackward(*I);
+  bool PLive = LiveRegs.contains(W65816::P);
+
+  if (PLive) {
+    // P is live - preserve flags with PHP/PLP
+    buildMI(MBB, MBBI, W65816::PHP);
+  }
+
   // Save A (the copy goes through A but must not clobber it)
   buildMI(MBB, MBBI, W65816::PHA);
   // Load from source, store to destination
@@ -5364,6 +5938,11 @@ bool W65816ExpandPseudo::expandCOPY_IMAG_TO_IMAG(Block &MBB, BlockIt MBBI) {
       .addImm(DstDPAddr);
   // Restore A
   buildMI(MBB, MBBI, W65816::PLA);
+
+  if (PLive) {
+    // Restore flags
+    buildMI(MBB, MBBI, W65816::PLP);
+  }
 
   MI.eraseFromParent();
   return true;

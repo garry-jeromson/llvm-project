@@ -9,12 +9,12 @@ target triple = "w65816-unknown-none"
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: switch_small:
-; Small switches lower to comparison chains via cpx
-; CHECK: cpx #0
+; Small switches lower to comparison chains via cmp (value stays in A)
+; CHECK: cmp #0
 ; CHECK: bne
-; CHECK: cpx #1
+; CHECK: cmp #1
 ; CHECK: bne
-; CHECK: cpx #2
+; CHECK: cmp #2
 ; CHECK: rts
 define i16 @switch_small(i16 %x) {
 entry:
@@ -107,9 +107,9 @@ default:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: switch_two:
-; CHECK: cpx #0
+; CHECK: cmp #0
 ; CHECK: bne
-; CHECK: cpx #1
+; CHECK: cmp #1
 ; CHECK: rts
 define i16 @switch_two(i16 %x) {
 entry:
@@ -133,9 +133,9 @@ default:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: switch_fallthrough:
-; CHECK: cpx #1
+; CHECK: cmp #1
 ; CHECK: bne
-; CHECK: cpx #2
+; CHECK: cmp #2
 ; CHECK: rts
 define i16 @switch_fallthrough(i16 %x) {
 entry:
@@ -185,9 +185,9 @@ default:
 ;===----------------------------------------------------------------------===;
 
 ; CHECK-LABEL: switch_compute:
-; CHECK: cpy #0
+; CHECK: cmp #0
 ; CHECK: bne
-; CHECK: cpy #1
+; CHECK: cmp #1
 ; CHECK: rts
 define i16 @switch_compute(i16 %x, i16 %y) {
 entry:

@@ -68,7 +68,7 @@ if.false:
 ; The comparison result is stored as a boolean (0 or 1)
 ; GISel uses Select pattern for icmp eq, then masks via DP scratch and stores
 ; CHECK: ldy #1
-; CHECK: sbc
+; CHECK: cmp
 ; CHECK: bne
 ; CHECK: and
 ; CHECK: sep #32

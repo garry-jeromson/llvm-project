@@ -161,7 +161,7 @@ def GPR16Phys : RegisterClass<"W65816", [i16], 16, (add A, X, Y)>;
 def IMAG16 : RegisterClass<"W65816", [i16], 16,
   (add RS0, RS1, RS2, RS3, RS4, RS5, RS6, RS7,
        RS8, RS9, RS10, RS11, RS12, RS13, RS14, RS15)> {
-  let CopyCost = 4;  // Higher cost than physical registers (default is 1)
+  let CopyCost = 2;  // Higher cost than physical registers (default is 1)
 }
 
 // All 16-bit registers including special purpose (for moves)

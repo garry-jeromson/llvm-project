@@ -510,8 +510,8 @@ bool W65816PeepholeOpt::optimizeMBB(MachineBasicBlock &MBB) {
           HasBranch = true;
           continue;
         }
-        if (ScanOpc == W65816::BRA) {
-          // BRA is unconditional, doesn't use flags, but terminates the
+        if (ScanOpc == W65816::BRA || ScanOpc == W65816::JMP_abs) {
+          // Unconditional branch doesn't use flags, but terminates the
           // branch sequence.
           break;
         }
@@ -654,7 +654,9 @@ bool W65816PeepholeOpt::removeRedundantBranches(MachineFunction &MF) {
       MachineInstr &PrevMI = *std::prev(MBB.end(), 2);
 
       unsigned CompOpc = getComplementBranch(PrevMI.getOpcode());
-      if (CompOpc && LastMI.getOpcode() == W65816::BRA &&
+      if (CompOpc &&
+          (LastMI.getOpcode() == W65816::BRA ||
+           LastMI.getOpcode() == W65816::JMP_abs) &&
           PrevMI.getNumOperands() > 0 && PrevMI.getOperand(0).isMBB() &&
           LastMI.getNumOperands() > 0 && LastMI.getOperand(0).isMBB()) {
         MachineBasicBlock *CondTarget = PrevMI.getOperand(0).getMBB();
@@ -675,16 +677,19 @@ bool W65816PeepholeOpt::removeRedundantBranches(MachineFunction &MF) {
       }
     }
 
-    // Check if the last instruction is a BRA to the next block
+    // Check if the last instruction is an unconditional branch to the next
+    // block
     MachineInstr &LastMI = MBB.back();
-    if (LastMI.getOpcode() != W65816::BRA)
+    if (LastMI.getOpcode() != W65816::BRA &&
+        LastMI.getOpcode() != W65816::JMP_abs)
       continue;
 
     // Check if the branch target is the next block
     if (LastMI.getNumOperands() > 0 && LastMI.getOperand(0).isMBB()) {
       MachineBasicBlock *TargetMBB = LastMI.getOperand(0).getMBB();
       if (TargetMBB == NextMBB) {
-        LLVM_DEBUG(dbgs() << "Removing redundant BRA to fall-through block\n");
+        LLVM_DEBUG(dbgs() << "Removing redundant unconditional branch "
+                             "to fall-through block\n");
         LastMI.eraseFromParent();
         Modified = true;
       }

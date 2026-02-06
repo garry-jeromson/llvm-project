@@ -9,7 +9,8 @@ target triple = "w65816-unknown-none"
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: test_select_eq:
-; CHECK: sbc
+; Unsigned comparison (EQ) uses non-destructive CMP
+; CHECK: cmp
 ; CHECK: bne
 ; CHECK: rts
 define i16 @test_select_eq(i16 %a, i16 %b, i16 %c) {
@@ -24,7 +25,8 @@ define i16 @test_select_eq(i16 %a, i16 %b, i16 %c) {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: select_ult:
-; CHECK: sbc
+; Unsigned comparison uses non-destructive CMP
+; CHECK: cmp
 ; CHECK: bcs
 ; CHECK: rts
 define i16 @select_ult(i16 %a, i16 %b, i16 %c) {
@@ -34,7 +36,8 @@ define i16 @select_ult(i16 %a, i16 %b, i16 %c) {
 }
 
 ; CHECK-LABEL: select_ugt:
-; CHECK: sbc
+; Unsigned comparison uses non-destructive CMP
+; CHECK: cmp
 ; CHECK: beq
 ; CHECK: bcc
 ; CHECK: rts
@@ -49,7 +52,8 @@ define i16 @select_ugt(i16 %a, i16 %b, i16 %c) {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: select_const:
-; CHECK: sbc
+; Unsigned comparison (EQ) uses non-destructive CMP
+; CHECK: cmp
 ; CHECK: bne
 ; CHECK: rts
 define i16 @select_const(i16 %a, i16 %b) {
@@ -64,6 +68,8 @@ define i16 @select_const(i16 %a, i16 %b) {
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: select_slt:
+; Signed comparison uses SEC + SBC (sets V flag)
+; CHECK: sec
 ; CHECK: sbc
 ; CHECK: bvs
 ; CHECK: rts
@@ -74,6 +80,8 @@ define i16 @select_slt(i16 %a, i16 %b, i16 %c) {
 }
 
 ; CHECK-LABEL: select_sgt:
+; Signed comparison uses SEC + SBC (sets V flag)
+; CHECK: sec
 ; CHECK: sbc
 ; CHECK: bvs
 ; CHECK: rts
@@ -84,6 +92,8 @@ define i16 @select_sgt(i16 %a, i16 %b, i16 %c) {
 }
 
 ; CHECK-LABEL: select_sle:
+; Signed comparison uses SEC + SBC (sets V flag)
+; CHECK: sec
 ; CHECK: sbc
 ; CHECK: beq
 ; CHECK: bvs
@@ -95,6 +105,8 @@ define i16 @select_sle(i16 %a, i16 %b, i16 %c) {
 }
 
 ; CHECK-LABEL: select_sge:
+; Signed comparison uses SEC + SBC (sets V flag)
+; CHECK: sec
 ; CHECK: sbc
 ; CHECK: bvs
 ; CHECK: rts
@@ -110,7 +122,8 @@ define i16 @select_sge(i16 %a, i16 %b, i16 %c) {
 
 ; Test unsigned greater than (SETUGT) - requires C=1 AND Z=0
 ; CHECK-LABEL: test_select_ugt:
-; CHECK: sbc
+; Unsigned comparison uses non-destructive CMP
+; CHECK: cmp
 ; CHECK: beq
 ; CHECK: bcc
 ; CHECK: rts
@@ -122,7 +135,8 @@ define i16 @test_select_ugt(i16 %a, i16 %b, i16 %c) {
 
 ; Test unsigned less or equal (SETULE) - requires C=0 OR Z=1
 ; CHECK-LABEL: test_select_ule:
-; CHECK: sbc
+; Unsigned comparison uses non-destructive CMP
+; CHECK: cmp
 ; CHECK: beq
 ; CHECK: bcs
 ; CHECK: rts

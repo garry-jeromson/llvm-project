@@ -31,6 +31,7 @@ public:
 private:
   bool legalizeVAStart(MachineInstr &MI, MachineIRBuilder &MIRBuilder) const;
   bool legalizeExtLoad(MachineInstr &MI, MachineIRBuilder &MIRBuilder) const;
+  bool legalizeMulHigh(MachineInstr &MI, MachineIRBuilder &MIRBuilder) const;
 };
 
 } // end namespace llvm

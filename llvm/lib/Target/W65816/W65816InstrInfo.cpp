@@ -333,11 +333,14 @@ unsigned W65816InstrInfo::insertBranch(
   if (BytesAdded)
     *BytesAdded = 0;
 
-  // Unconditional branch
+  // Unconditional branch - use JMP (3 bytes, 16-bit absolute) instead of
+  // BRA (2 bytes, 8-bit signed offset) to avoid branch-out-of-range failures
+  // when branch relaxation inverts a conditional branch and inserts a
+  // fallthrough unconditional branch.
   if (Cond.empty()) {
-    BuildMI(&MBB, DL, get(W65816::BRA)).addMBB(TBB);
+    BuildMI(&MBB, DL, get(W65816::JMP_abs)).addMBB(TBB);
     if (BytesAdded)
-      *BytesAdded = 2;
+      *BytesAdded = 3;
     return 1;
   }
 
@@ -348,9 +351,9 @@ unsigned W65816InstrInfo::insertBranch(
     *BytesAdded = 2;
 
   if (FBB) {
-    BuildMI(&MBB, DL, get(W65816::BRA)).addMBB(FBB);
+    BuildMI(&MBB, DL, get(W65816::JMP_abs)).addMBB(FBB);
     if (BytesAdded)
-      *BytesAdded += 2;
+      *BytesAdded += 3;
     return 2;
   }
 
@@ -372,8 +375,12 @@ unsigned W65816InstrInfo::removeBranch(MachineBasicBlock &MBB,
     if (!I->isBranch())
       break;
 
-    if (BytesRemoved)
-      *BytesRemoved += 2; // Assume 2 bytes per branch
+    if (BytesRemoved) {
+      if (I->getOpcode() == W65816::JMP_abs)
+        *BytesRemoved += 3;
+      else
+        *BytesRemoved += 2;
+    }
 
     I->eraseFromParent();
     I = MBB.end();

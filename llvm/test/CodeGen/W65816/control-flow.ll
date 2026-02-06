@@ -126,8 +126,7 @@ else:
 ; CHECK: .L{{.*}}:
 ; CHECK: clc
 ; CHECK: adc #65535
-; CHECK: tax
-; CHECK: cpx #1
+; CHECK: cmp #1
 ; CHECK: bne .L
 ; CHECK: rts
 define i16 @count_loop(i16 %n) {
@@ -149,9 +148,8 @@ exit:
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: test_ugt_branch:
-; Comparison via SEC + SBC
-; CHECK: sec
-; CHECK: sbc
+; Unsigned comparison via CMP (non-destructive)
+; CHECK: cmp
 ; UGT uses compound condition - branch to else if NOT(UGT): Z=1 OR C=0
 ; CHECK: beq
 ; CHECK: bcc
@@ -173,9 +171,8 @@ else:
 ;===----------------------------------------------------------------------===
 
 ; CHECK-LABEL: test_ule_branch:
-; Comparison via SEC + SBC
-; CHECK: sec
-; CHECK: sbc
+; Unsigned comparison via CMP (non-destructive)
+; CHECK: cmp
 ; ULE: branch to then if equal, branch to else if strictly greater
 ; CHECK: beq
 ; CHECK: bcs

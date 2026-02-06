@@ -69,11 +69,12 @@ define i16 @lshr_15(i16 %a) {
   ret i16 %r
 }
 
-; Test icmp slt with 0 - GISel uses signed compare + select pattern
+; Test icmp slt with 0 - GISel uses signed compare (SEC+SBC) + select pattern
 ; CHECK-LABEL: test_slt_zero:
-; CHECK: ldx #1
-; CHECK: ldy #0
-; CHECK: cmp #0
+; CHECK: ldy #1
+; CHECK: ldx #0
+; CHECK: sec
+; CHECK: sbc #0
 ; CHECK: bvs
 ; CHECK: rts
 define i16 @test_slt_zero(i16 %val) {

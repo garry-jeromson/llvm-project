@@ -67,6 +67,29 @@ private:
   /// Map CmpInst::Predicate to a Select16 pseudo opcode.
   unsigned getSelect16Opcode(CmpInst::Predicate Pred) const;
 
+  /// Returns true if the predicate requires signed comparison (V flag).
+  static bool isSignedPredicate(CmpInst::Predicate Pred) {
+    switch (Pred) {
+    case CmpInst::ICMP_SLT:
+    case CmpInst::ICMP_SGE:
+    case CmpInst::ICMP_SGT:
+    case CmpInst::ICMP_SLE:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  /// Get the appropriate CMP pseudo opcode for register-register comparison.
+  unsigned getCmpRROpc(CmpInst::Predicate Pred) const {
+    return isSignedPredicate(Pred) ? W65816::SCMP16rr : W65816::CMP16rr;
+  }
+
+  /// Get the appropriate CMP pseudo opcode for register-immediate comparison.
+  unsigned getCmpRIOpc(CmpInst::Predicate Pred) const {
+    return isSignedPredicate(Pred) ? W65816::SCMP16ri : W65816::CMP16ri;
+  }
+
   /// Look through G_INTTOPTR to find the underlying address definition.
   MachineInstr *lookThroughIntToPtr(Register Reg,
                                     MachineRegisterInfo &MRI) const;
@@ -1209,22 +1232,24 @@ bool W65816InstructionSelector::selectICmp(MachineInstr &I) const {
   BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::MOV16ri), FalseReg)
       .addImm(0);
 
-  // Emit CMP after constants are materialized.
+  // Emit CMP/SCMP after constants are materialized.
+  // Use SCMP for signed predicates (sets V flag via SEC+SBC),
+  // CMP for unsigned (uses non-destructive CMP/CPX/CPY).
   MachineInstr *RHSDef = MRI.getVRegDef(RHS);
   if (RHSDef && RHSDef->getOpcode() == TargetOpcode::G_CONSTANT) {
     auto *CI = RHSDef->getOperand(1).getCImm();
     if (CI) {
       int64_t Imm = CI->getSExtValue();
-      BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16ri))
+      BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRIOpc(Pred)))
           .addReg(LHS)
           .addImm(Imm);
     } else {
-      BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16rr))
+      BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRROpc(Pred)))
           .addReg(LHS)
           .addReg(RHS);
     }
   } else {
-    BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16rr))
+    BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRROpc(Pred)))
         .addReg(LHS)
         .addReg(RHS);
   }
@@ -1298,21 +1323,21 @@ bool W65816InstructionSelector::selectBrCond(MachineInstr &I) const {
       return false;
     }
 
-    // Emit CMP.
+    // Emit CMP/SCMP based on predicate.
     MachineInstr *RHSDef = MRI.getVRegDef(RHS);
     if (RHSDef && RHSDef->getOpcode() == TargetOpcode::G_CONSTANT) {
       auto *CI = RHSDef->getOperand(1).getCImm();
       if (CI) {
-        BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16ri))
+        BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRIOpc(Pred)))
             .addReg(LHS)
             .addImm(CI->getSExtValue());
       } else {
-        BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16rr))
+        BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRROpc(Pred)))
             .addReg(LHS)
             .addReg(RHS);
       }
     } else {
-      BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16rr))
+      BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRROpc(Pred)))
           .addReg(LHS)
           .addReg(RHS);
     }
@@ -1330,6 +1355,7 @@ bool W65816InstructionSelector::selectBrCond(MachineInstr &I) const {
   }
 
   // Non-ICMP condition: compare the boolean value with 0, branch if NE.
+  // Always unsigned (comparing with 0).
   BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16ri))
       .addReg(CondReg)
       .addImm(0);
@@ -1365,21 +1391,21 @@ bool W65816InstructionSelector::selectSelect(MachineInstr &I) const {
     if (!SelectOpc)
       return false;
 
-    // Emit CMP.
+    // Emit CMP/SCMP based on predicate.
     MachineInstr *RHSDef = MRI.getVRegDef(RHS);
     if (RHSDef && RHSDef->getOpcode() == TargetOpcode::G_CONSTANT) {
       auto *CI = RHSDef->getOperand(1).getCImm();
       if (CI) {
-        BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16ri))
+        BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRIOpc(Pred)))
             .addReg(LHS)
             .addImm(CI->getSExtValue());
       } else {
-        BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16rr))
+        BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRROpc(Pred)))
             .addReg(LHS)
             .addReg(RHS);
       }
     } else {
-      BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16rr))
+      BuildMI(MBB, I, I.getDebugLoc(), TII.get(getCmpRROpc(Pred)))
           .addReg(LHS)
           .addReg(RHS);
     }
@@ -1400,6 +1426,7 @@ bool W65816InstructionSelector::selectSelect(MachineInstr &I) const {
   }
 
   // Non-ICMP condition: compare boolean with 0, select based on NE.
+  // Always unsigned (comparing with 0).
   BuildMI(MBB, I, I.getDebugLoc(), TII.get(W65816::CMP16ri))
       .addReg(CondReg)
       .addImm(0);
