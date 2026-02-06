@@ -32,8 +32,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "w65816-lower"
 
-#include "W65816GenCallingConv.inc"
-
 W65816TargetLowering::W65816TargetLowering(const TargetMachine &TM,
                                            const W65816Subtarget &STI)
     : TargetLowering(TM, STI) {
