@@ -5761,43 +5761,12 @@ bool W65816ExpandPseudo::expandSTAindexedDPY(Block &MBB, BlockIt MBBI) {
 
 // Get the Direct Page address for an imaginary register.
 // RS0 = $10, RS1 = $12, ..., RS15 = $2E (each uses 2 bytes)
+// RS0-RS15 have consecutive enum values (RS0=19, RS1=20, ..., RS15=34),
+// so we can compute the address directly.
 unsigned W65816ExpandPseudo::getImaginaryRegDPAddr(Register Reg) const {
-  switch (Reg) {
-  case W65816::RS0:
-    return 0x10;
-  case W65816::RS1:
-    return 0x12;
-  case W65816::RS2:
-    return 0x14;
-  case W65816::RS3:
-    return 0x16;
-  case W65816::RS4:
-    return 0x18;
-  case W65816::RS5:
-    return 0x1A;
-  case W65816::RS6:
-    return 0x1C;
-  case W65816::RS7:
-    return 0x1E;
-  case W65816::RS8:
-    return 0x20;
-  case W65816::RS9:
-    return 0x22;
-  case W65816::RS10:
-    return 0x24;
-  case W65816::RS11:
-    return 0x26;
-  case W65816::RS12:
-    return 0x28;
-  case W65816::RS13:
-    return 0x2A;
-  case W65816::RS14:
-    return 0x2C;
-  case W65816::RS15:
-    return 0x2E;
-  default:
-    llvm_unreachable("Invalid imaginary register");
-  }
+  assert(Reg >= W65816::RS0 && Reg <= W65816::RS15 &&
+         "Invalid imaginary register");
+  return 0x10 + 2 * (Reg - W65816::RS0);
 }
 
 SmallVector<unsigned, 16> W65816ExpandPseudo::getUsedImaginaryRegs() const {
